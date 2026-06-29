@@ -73,21 +73,26 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 - ⬜ `add handler`/`pane`
 
 ### Templates ✅ (`rust-service` + `svelte-app`)
-- ✅ `templates/rust-service/` — minimal **conformant, compiling** axum service, embedded via
-     `include_str!` and laid down under `app/api/` by `midas new --profile service`. Distills the
-     canonical seams: `response` (BE-0002 envelope), `error` (BE-0003 `AppError`), `ids` (BE-0016).
-     Project tokens (`{{PKG}}`/`{{CRATE}}`) substituted at write time. **Verified end-to-end:** a
-     generated project passes `midas check` (3 backend checks green) **and** `cargo build` + `clippy
-     -D warnings` + runs (`/ping`→`pong`, `/hello`→ the envelope with a generated id).
-- ✅ `templates/svelte-app/` — minimal **conformant, building** SvelteKit app (Svelte 5 runes,
+- ✅ `templates/rust-service/` — **conformant, compiling** axum service, embedded via `include_str!`
+     and laid down under `app/api/` by `midas new --profile service`. Seams: `response` (BE-0002),
+     `error` (BE-0003 + `ErrorBody`), `ids` (BE-0016), `auth`/`RequireAuth` (BE-0004, Clerk-stub),
+     `http` pooled client (BE-0010), `tasks` tracker (BE-0011), `openapi` (BE-0014, utoipa-axum
+     `OpenApiRouter` → `/openapi.json`), `db` (Option<MySqlPool> + `AppState::db()`), and a sample
+     `modules/items` feature module (BE-0001). Tokens `{{PKG}}`/`{{CRATE}}`. **Verified end-to-end:**
+     `midas check` (3/0) + `cargo build` + `clippy -D warnings`, runs (`/ping`→`pong`; `/items/items`
+     → 401 without auth, the envelope with auth; `/openapi.json` exposes path + `clerk_jwt` scheme),
+     **and `midas add module` output compiles into it** (sqlx `macros` feature, runtime-checked
+     queries — no DB needed; BE-0018 `query!` + `.sqlx` cache still TODO'd).
+- ✅ `templates/svelte-app/` — **conformant, building** SvelteKit app (Svelte 5 runes,
      adapter-static), laid down under `app/web/` for `--profile app` (which also lays the backend).
-     Distills the frontend seams: `state/app.svelte.ts` (FE-0001 runes singleton), `api.ts` (FE-0005
-     typed wrapper), `utils.ts` `generateId` (FE-0010) + platform detection (FE-0012). `{{NAME}}`
-     substituted. **Verified end-to-end:** a generated app passes `midas check` (6 checks, both
-     layers) **and** `bun install` + `svelte-check` (0 errors) + `vite build`.
-- Notes: sqlx (BE-0018) + utoipa/OpenAPI (BE-0014) on the backend, and auth/billing (Clerk, STK-0005)
-  on both, are intentionally **TODO'd** in the starters so they build with no DB/codegen/keys;
-  `cli-tool` template dropped (one-stop CLI).
+     Seams: `state/app` + `state/auth` (FE-0001 singletons; auth registers the api token provider),
+     `api<T>()` (FE-0005), `utils` `generateId` (FE-0010) + platform detection (FE-0012), `ui/Button`
+     (FE-0011), and the `(public)` (SSR'd + prerendered) / `app` (`ssr=false` SPA) route-group split.
+     `{{NAME}}` substituted. **Verified end-to-end:** `midas check` (6/0, both layers) + `bun install`
+     + `svelte-check` (0 errors) + `vite build` (prerendered landing + `200.html` SPA fallback).
+- Notes: BE-0018 compile-checked `query!` + committed `.sqlx` cache (needs a DB) and Clerk
+  auth/billing wiring (STK-0005, needs keys) are intentionally **TODO'd** in the starters so they
+  build with no DB/keys; `cli-tool` template dropped (one-stop CLI).
 
 ### Reviewing (delegated semantic pass) ✅
 - ✅ `standards/review-agent-prompt.md` — turnkey, vendor-neutral prompt operationalizing the inverted

@@ -1,4 +1,7 @@
+use {{CRATE}}::db;
+use {{CRATE}}::http::Http;
 use {{CRATE}}::routes::{self, AppState};
+use {{CRATE}}::tasks::Tasks;
 
 #[tokio::main]
 async fn main() {
@@ -10,7 +13,28 @@ async fn main() {
         )
         .init();
 
-    let app = routes::build(AppState::default());
+    let http = Http::new();
+    let tasks = Tasks::new();
+
+    // The server starts even without a database, so liveness passes while the pool warms up.
+    let pool = match std::env::var("DATABASE_URL") {
+        Ok(url) => match db::connect(&url).await {
+            Ok(p) => {
+                tracing::info!("connected to database");
+                Some(p)
+            }
+            Err(e) => {
+                tracing::warn!("database not ready, starting anyway: {e}");
+                None
+            }
+        },
+        Err(_) => {
+            tracing::info!("DATABASE_URL unset; starting without a database");
+            None
+        }
+    };
+
+    let app = routes::build(AppState { pool, http, tasks: tasks.clone() });
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".into());
     let addr = format!("0.0.0.0:{port}");
@@ -21,6 +45,9 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("server error");
+
+    // HTTP has drained; finish tracked background work (bounded), so nothing is dropped on deploy.
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), tasks.shutdown()).await;
 }
 
 /// Graceful shutdown on Ctrl-C / SIGTERM.

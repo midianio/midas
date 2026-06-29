@@ -1,16 +1,17 @@
 //! The one success envelope every JSON endpoint returns through (BE-0002).
 //!
 //! Wire shape: `{ "data": …, "code": 200, "timestamp": <RFC3339>, "count": N }` — `count` is the
-//! list length for arrays, else 1. Returning through `ok` / `ok_list` keeps the shape identical
-//! across every handler, so it cannot drift endpoint-by-endpoint.
+//! list length for arrays, else 1. `ApiResponse<T>` is also the documented OpenAPI schema (utoipa
+//! `ToSchema`), so the generated contract and the bytes on the wire come from the same struct.
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
+use utoipa::ToSchema;
 
 /// The success envelope wrapping every JSON payload.
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ApiResponse<T> {
     /// The payload (an object for detail endpoints, an array for list endpoints).
     pub data: T,

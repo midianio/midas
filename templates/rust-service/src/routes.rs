@@ -1,30 +1,51 @@
-//! Router assembly. Routes return through the `response` envelope (BE-0002) and fail with `AppError`
-//! (BE-0003). Grow the service with `midas add module <name>` and mount each module's router here.
+//! Router assembly + the shared `AppState`. Documented routes come from the OpenAPI seam (so the
+//! contract can't drift); liveness and the spec endpoint are added here. Grow the service with
+//! `midas add module <name>`, then register its handler in `openapi::router`.
 
+use axum::http::header;
+use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::response::Response;
 use axum::Router;
+use sqlx::MySqlPool;
 
 use crate::error::AppError;
-use crate::{ids, response};
+use crate::http::Http;
+use crate::tasks::Tasks;
 
-/// Shared application state handed to every handler. Add your pool, config, and seams as fields.
-#[derive(Clone, Default)]
-pub struct AppState {}
+/// Shared application state, handed to every handler. Clone freely — every field is cheap to clone.
+#[derive(Clone)]
+pub struct AppState {
+    /// `None` until a database is configured/reachable (the server still starts — see `db`).
+    pub pool: Option<MySqlPool>,
+    /// Pooled outbound HTTP (BE-0010).
+    pub http: Http,
+    /// Tracked background work, drained at shutdown (BE-0011).
+    pub tasks: Tasks,
+}
+
+impl AppState {
+    /// The DB pool, or a clean 500 when no database is configured. DB-backed handlers call this.
+    pub fn db(&self) -> Result<&MySqlPool, AppError> {
+        self.pool
+            .as_ref()
+            .ok_or_else(|| AppError::Internal("no database configured".into()))
+    }
+}
 
 pub fn build(state: AppState) -> Router {
-    Router::new()
-        .route("/ping", get(ping))
-        .route("/hello", get(hello))
+    // The documented router (paths + schemas) comes from the OpenAPI seam; `api` is the assembled
+    // spec, served at /openapi.json for downstream type generation.
+    let (router, api) = crate::openapi::router().split_for_parts();
+    let openapi_json = serde_json::to_string_pretty(&api).expect("serialize openapi spec");
+
+    router
+        .route("/ping", get(|| async { "pong" }))
+        .route(
+            "/openapi.json",
+            get(move || {
+                let body = openapi_json.clone();
+                async move { ([(header::CONTENT_TYPE, "application/json")], body).into_response() }
+            }),
+        )
         .with_state(state)
-}
-
-/// Liveness probe — passes immediately, before any dependency warms up.
-async fn ping() -> &'static str {
-    "pong"
-}
-
-/// Demo endpoint: a fresh id returned through the standard envelope. Replace with real modules.
-async fn hello() -> Result<Response, AppError> {
-    Ok(response::ok(serde_json::json!({ "id": ids::generate() })))
 }

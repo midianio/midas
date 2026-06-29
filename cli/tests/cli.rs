@@ -362,12 +362,17 @@ fn new_app_scaffolds_backend_and_frontend() {
     // app profile lays down BOTH the rust-service backend and the svelte-app frontend
     for f in [
         "app/api/src/main.rs",
+        "app/api/src/modules/items/handler.rs", // BE-0001 modules pattern
+        "app/api/src/auth/mod.rs",              // BE-0004 RequireAuth seam
         "app/web/package.json",
         "app/web/svelte.config.js",
-        "app/web/src/routes/+page.svelte",
+        "app/web/src/routes/(public)/+page.svelte", // SSR'd marketing group
+        "app/web/src/routes/app/+page.svelte",      // SPA app group
         "app/web/src/lib/utils.ts",
         "app/web/src/lib/api.ts",
         "app/web/src/lib/state/app.svelte.ts", // FE-0001 state dir must exist or the gate fails
+        "app/web/src/lib/state/auth.svelte.ts", // auth singleton + token provider
+        "app/web/src/lib/components/ui/Button.svelte", // FE-0011 component
     ] {
         assert!(proj.join(f).exists(), "missing {f}");
     }

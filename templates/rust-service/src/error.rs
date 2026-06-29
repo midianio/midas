@@ -18,6 +18,9 @@ pub enum AppError {
     NotFound,
     #[error("bad request")]
     BadRequest(String),
+    /// Database error — `sqlx::Error::RowNotFound` maps to 404, everything else to 500.
+    #[error("database error")]
+    Db(#[from] sqlx::Error),
     #[error("internal error")]
     Internal(String),
 }
@@ -30,6 +33,10 @@ impl IntoResponse for AppError {
             AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", None),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found", None),
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, "bad request", Some(m.clone())),
+            AppError::Db(sqlx::Error::RowNotFound) => (StatusCode::NOT_FOUND, "not found", None),
+            AppError::Db(e) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error", Some(format!("db: {e}")))
+            }
             AppError::Internal(m) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error", Some(m.clone()))
             }
@@ -43,4 +50,15 @@ impl IntoResponse for AppError {
 
         (status, Json(json!({ "status": text, "code": status.as_u16() }))).into_response()
     }
+}
+
+/// The documented error wire shape (`{ "status": <text>, "code": <n> }`) for the OpenAPI contract
+/// (BE-0014). The runtime body above is built by hand so the bytes stay identical; this only feeds
+/// the generated spec.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct ErrorBody {
+    /// Human-readable status text, e.g. `"not found"`.
+    pub status: String,
+    /// Numeric HTTP status code, echoed in the body.
+    pub code: u16,
 }
