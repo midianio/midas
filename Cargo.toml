@@ -23,6 +23,8 @@ walkdir = "2"
 ignore = "0.4"
 globset = "0.4"
 regex = "1"
+ctrlc = "3"
+libc = "0.2"
 
 # dev / test
 assert_cmd = "2"

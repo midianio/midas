@@ -68,6 +68,11 @@ enum Commands {
     },
     /// Diagnose the local dev environment.
     Doctor,
+    /// Run the project's dev processes concurrently (+ the pscale tunnel) — `[dev]` in midas.toml.
+    Dev {
+        /// Run only these named processes (the tunnel always runs); default: all.
+        only: Vec<String>,
+    },
 }
 
 fn main() {
@@ -91,6 +96,7 @@ fn main() {
         Commands::Check { root } => cmd::check::run(&ctx, root),
         Commands::Sync { check } => cmd::sync::run(&ctx, check),
         Commands::Doctor => cmd::doctor::run(&ctx, false),
+        Commands::Dev { only } => cmd::dev::run(&ctx, only),
     })();
 
     std::process::exit(finish(&ctx.out, result));

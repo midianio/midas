@@ -397,6 +397,50 @@ fn new_app_scaffolds_backend_and_frontend() {
 }
 
 #[test]
+fn dev_runs_processes_with_prefixed_output() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("midas.toml"),
+        "[standard]\nversion = \"0.1.0\"\n[dev]\nprocesses = [\n\
+         { name = \"api\", cmd = \"echo hi-from-api\" },\n\
+         { name = \"web\", cmd = \"echo hi-from-web\" },\n]\n",
+    )
+    .unwrap();
+    let out = midas()
+        .args(["--no-color", "dev"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "dev exits 0 when processes finish");
+    // process stdout is streamed to our stdout, one prefixed line per process
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("api │ hi-from-api"),
+        "missing api prefix: {stdout}"
+    );
+    assert!(
+        stdout.contains("web │ hi-from-web"),
+        "missing web prefix: {stdout}"
+    );
+}
+
+#[test]
+fn dev_without_config_is_usage_error() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("midas.toml"),
+        "[standard]\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    midas()
+        .args(["dev"])
+        .current_dir(dir.path())
+        .assert()
+        .failure()
+        .code(3); // no [dev] processes → usage error
+}
+
+#[test]
 fn new_refuses_nonempty_dir() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("acme")).unwrap();

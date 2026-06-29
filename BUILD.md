@@ -46,6 +46,8 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 - ✅ `checks/` banned-call · file-structure (artifact-hash/provenance/clippy = deferred → Skipped)
 - ✅ `cmd/sync.rs` managed-block writer
 - ✅ `cmd/doctor.rs` env diagnosis
+- ✅ `cmd/dev.rs` concurrent dev orchestrator (`[dev]` in midas.toml): prefixed streaming output,
+     optional pscale tunnel (reuses `[flow]` + paired branch), per-process-group Ctrl-C teardown
 - ✅ `cmd/add.rs` + `cmd/new.rs` scaffolding; `cmd/templates.rs` embedded skeletons
 - ⏸ `cmd/gen.rs` TS types from OpenAPI
 
@@ -103,11 +105,11 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 - ✅ installed on PATH: `~/.cargo/bin/midas` (v0.1.0) — `midas <cmd>` works globally
 - ✅ dogfood: repo has its own `midas.toml` (profile=cli, trunk=main); `midas check .` clean
 - ✅ `.github/workflows/ci.yml` — fmt + clippy -D + test + `midas check` self
-- ✅ `cargo fmt --check`, `cargo clippy -D warnings`, 17 tests — all green
+- ✅ `cargo fmt --check`, `cargo clippy -D warnings`, 19 tests — all green
 - ✅ docs reconciled: SPEC/README/cli-README match built reality (inverted reviewer, mechanical-only
      gate exit 0/1/2/3, vendor-with-provenance default, upgrade/codemods deferred)
 
-### Surface: flow · add · new (+ templates) · check · sync · doctor. Both code templates built + verified.
+### Surface: flow · add · new (+ templates) · dev · check · sync · doctor. Both code templates built + verified.
 Remaining work needs a decision or touches another repo:
 - **Template depth** — the `rust-service` + `svelte-app` starters are deliberately minimal. Growing
   them (sqlx + offline cache BE-0018, utoipa OpenAPI BE-0014, Clerk auth/billing STK-0005) needs

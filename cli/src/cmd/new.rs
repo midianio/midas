@@ -142,6 +142,27 @@ fn is_empty_dir(p: &Path) -> bool {
         .unwrap_or(true)
 }
 
+/// The `[dev]` block for `midas dev` — the concurrent process set per profile. Only code profiles
+/// (app/service) get one; the tunnel is off by default (enable it + set `[flow]` pscale_* when the
+/// project uses a PlanetScale DB).
+fn dev_block(profile: Profile) -> String {
+    let processes = match profile {
+        Profile::App => {
+            "  { name = \"api\", cwd = \"app/api\", cmd = \"cargo run\" },\n  \
+{ name = \"web\", cwd = \"app/web\", cmd = \"bun run dev\" },\n"
+        }
+        Profile::Service => "  { name = \"api\", cwd = \"app/api\", cmd = \"cargo run\" },\n",
+        Profile::Cli | Profile::Library | Profile::Pipeline => return String::new(),
+    };
+    format!(
+        "\n# `midas dev` runs these concurrently (prefixed output, one Ctrl-C tears all down). Set\n\
+# tunnel = true (and configure [flow] pscale_*) to raise a PlanetScale tunnel before they start.\n\
+[dev]\n\
+tunnel = false\n\
+processes = [\n{processes}]\n"
+    )
+}
+
 fn manifest_toml(version: &str, profile: Profile) -> String {
     let stack = profile.stack_toml();
     let stack_block = if stack.is_empty() {
@@ -157,10 +178,11 @@ profile = \"{}\"\n\
 {stack_block}\n\
 [flow]\n\
 trunk = \"main\"\n\
-\n\
+{}\n\
 # Ledgered escape hatches: convention id → reason. `midas check` treats these as expected.\n\
 [deviations]\n",
-        profile.as_str()
+        profile.as_str(),
+        dev_block(profile),
     )
 }
 

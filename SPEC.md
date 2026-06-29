@@ -138,6 +138,7 @@ CLI standard, [`standards/cli/`](./standards/cli/)).
 | `midas add state\|migration\|component\|module` | Stamp a conventional piece — deterministic bytes (the `add-*` skills promoted to commands). `module` scaffolds the 4-file backend module + wires `pub mod` into `modules/mod.rs`. | **shipped** |
 | `midas add handler\|pane\|…` | The remaining kinds. | next |
 | `midas new <name> --profile <p>` | Scaffold a conformant project: `midas.toml` (version-pinned), agent docs with the synced block, starter CI, dir shape — plus runnable skeletons: `rust-service` (`service`) and `rust-service` + `svelte-app` (`app`). | **shipped** |
+| `midas dev [names…]` | Run `[dev].processes` concurrently with prefixed streaming output + one-Ctrl-C teardown (each process leads its own group). When `[dev].tunnel`, raises the pscale tunnel (reusing `[flow]` + the paired branch) first. Replaces `turbo run dev` + the tunnel sidecar. | **shipped** |
 | `midas setup` / `midas teardown` | Bootstrap / tear down local dev (deps, pscale proxy, env, hooks). | later |
 | `midas gen types` | Regenerate the TS client from the backend OpenAPI. | later |
 | `midas upgrade [--to <ver>]` | Move to a newer standard version; run codemods; report residuals. | deferred |

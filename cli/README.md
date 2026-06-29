@@ -44,7 +44,8 @@ agent-runnable contract is enforced once, centrally, not re-implemented per comm
 | `midas doctor` | — | env diagnosis | 0 / 2 | **shipped** |
 | `midas add state\|migration\|component\|module <name>` | `--dir`, `--ui`, `--no-wire`, `--force` | stamped file paths (+ `pub mod` wiring for `module`) | 0 / 2 / 3 | **shipped** |
 | `midas add handler\|pane …` | kind-specific | stamped file paths | 0 / 3 | next |
-| `midas new <name>` | `--profile`, `--dir`, `--force` | created project file list | 0 / 2 / 3 | **shipped** (profile init; code `templates/` next) |
+| `midas new <name>` | `--profile`, `--dir`, `--force` | created project file list | 0 / 2 / 3 | **shipped** (incl. `rust-service` + `svelte-app` skeletons) |
+| `midas dev [names…]` | (globals only) | streamed prefixed process output | 0 / 1 / 3 | **shipped** (concurrent runner + pscale tunnel; `[dev]` in midas.toml) |
 | `midas setup` / `teardown` | `--no-db` / `--yes` | bootstrapped / torn down | 0 / 1 | later |
 | `midas gen types` | `--out` | written path | 0 / 1 | deferred |
 | `midas upgrade` | `--to <ver>`, `--dry-run` | applied codemods + residuals | 0 / 1 | deferred |
