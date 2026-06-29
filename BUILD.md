@@ -72,16 +72,22 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
      `rust-service` skeleton** (below).
 - ⬜ `add handler`/`pane`
 
-### Templates ✅ (`rust-service`) / ⬜ (`svelte-app`)
+### Templates ✅ (`rust-service` + `svelte-app`)
 - ✅ `templates/rust-service/` — minimal **conformant, compiling** axum service, embedded via
      `include_str!` and laid down under `app/api/` by `midas new --profile service`. Distills the
      canonical seams: `response` (BE-0002 envelope), `error` (BE-0003 `AppError`), `ids` (BE-0016).
      Project tokens (`{{PKG}}`/`{{CRATE}}`) substituted at write time. **Verified end-to-end:** a
      generated project passes `midas check` (3 backend checks green) **and** `cargo build` + `clippy
      -D warnings` + runs (`/ping`→`pong`, `/hello`→ the envelope with a generated id).
-- ⬜ `svelte-app` (App profile frontend; needs the bun toolchain to verify a build) — next.
-- Notes: sqlx (BE-0018) + utoipa/OpenAPI (BE-0014) intentionally deferred in the starter (TODO'd in
-  the template) so it compiles with no DB/codegen; `cli-tool` template dropped (one-stop CLI).
+- ✅ `templates/svelte-app/` — minimal **conformant, building** SvelteKit app (Svelte 5 runes,
+     adapter-static), laid down under `app/web/` for `--profile app` (which also lays the backend).
+     Distills the frontend seams: `state/app.svelte.ts` (FE-0001 runes singleton), `api.ts` (FE-0005
+     typed wrapper), `utils.ts` `generateId` (FE-0010) + platform detection (FE-0012). `{{NAME}}`
+     substituted. **Verified end-to-end:** a generated app passes `midas check` (6 checks, both
+     layers) **and** `bun install` + `svelte-check` (0 errors) + `vite build`.
+- Notes: sqlx (BE-0018) + utoipa/OpenAPI (BE-0014) on the backend, and auth/billing (Clerk, STK-0005)
+  on both, are intentionally **TODO'd** in the starters so they build with no DB/codegen/keys;
+  `cli-tool` template dropped (one-stop CLI).
 
 ### Reviewing (delegated semantic pass) ✅
 - ✅ `standards/review-agent-prompt.md` — turnkey, vendor-neutral prompt operationalizing the inverted
@@ -92,16 +98,15 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 - ✅ installed on PATH: `~/.cargo/bin/midas` (v0.1.0) — `midas <cmd>` works globally
 - ✅ dogfood: repo has its own `midas.toml` (profile=cli, trunk=main); `midas check .` clean
 - ✅ `.github/workflows/ci.yml` — fmt + clippy -D + test + `midas check` self
-- ✅ `cargo fmt --check`, `cargo clippy -D warnings`, 16 tests — all green
+- ✅ `cargo fmt --check`, `cargo clippy -D warnings`, 17 tests — all green
 - ✅ docs reconciled: SPEC/README/cli-README match built reality (inverted reviewer, mechanical-only
      gate exit 0/1/2/3, vendor-with-provenance default, upgrade/codemods deferred)
 
-### COMPLETE for the agreed scope (4 autonomous loop rounds). Surface: flow · add · new · check · sync · doctor.
-Everything below needs a decision or touches another repo — NOT autonomous work:
-- **`svelte-app` template** (App profile frontend) — the `rust-service` template is **built and
-  verified** (above); `svelte-app` is the remaining one. It needs the bun/SvelteKit toolchain to
-  verify a real build, so it's the next slice rather than done. (A `cli-tool` template is dropped:
-  `midas` is the single one-stop CLI.)
+### Surface: flow · add · new (+ templates) · check · sync · doctor. Both code templates built + verified.
+Remaining work needs a decision or touches another repo:
+- **Template depth** — the `rust-service` + `svelte-app` starters are deliberately minimal. Growing
+  them (sqlx + offline cache BE-0018, utoipa OpenAPI BE-0014, Clerk auth/billing STK-0005) needs
+  DB/keys and a scope call. (A `cli-tool` template stays dropped: `midas` is the single one-stop CLI.)
 - **`midas setup`/`teardown`** — midian-specific bootstrap (deps + pscale tunnel); needs the exact
   bootstrap steps to encode.
 - **artifact-hash / provenance-drift / clippy** check kinds — registry carries them; engine reports

@@ -4,7 +4,7 @@
 //! compiles and passes `midas check` out of the box.
 
 use crate::cmd::sync::managed_block;
-use crate::cmd::templates::{self, TemplateFile, RUST_SERVICE};
+use crate::cmd::templates::{self, TemplateFile, RUST_SERVICE, SVELTE_APP};
 use crate::core::exit::{CliError, CliResult};
 use crate::core::{prompt_line, Ctx};
 use crate::flow::config::slugify;
@@ -38,12 +38,13 @@ impl Profile {
         }
     }
 
-    /// The runnable code skeleton this profile lays down, if any (token-substituted at write time).
-    fn code_template(self) -> &'static [TemplateFile] {
+    /// The runnable code skeleton(s) this profile lays down, token-substituted at write time. App
+    /// gets both the backend service and the frontend app; service gets just the backend.
+    fn code_template(self) -> Vec<&'static TemplateFile> {
         match self {
-            Profile::Service => RUST_SERVICE,
-            // App also needs a frontend skeleton (svelte-app) before it's checkable — pending.
-            Profile::App | Profile::Cli | Profile::Library | Profile::Pipeline => &[],
+            Profile::App => RUST_SERVICE.iter().chain(SVELTE_APP).collect(),
+            Profile::Service => RUST_SERVICE.iter().collect(),
+            Profile::Cli | Profile::Library | Profile::Pipeline => Vec::new(),
         }
     }
 
@@ -118,12 +119,13 @@ pub fn run(
 
     ctx.out
         .success(format!("created project {name} ({})", profile.as_str()));
-    if profile.code_template().is_empty() {
-        ctx.out.info(format!("cd {name} && midas check"));
-    } else {
-        ctx.out.info(format!(
-            "cd {name} && midas check && (cd app/api && cargo build)"
-        ));
+    ctx.out.info(format!("cd {name} && midas check"));
+    match profile {
+        Profile::Service => ctx.out.hint("build the service: cd app/api && cargo build"),
+        Profile::App => ctx.out.hint(
+            "build: (cd app/api && cargo build) · (cd app/web && bun install && bun run build)",
+        ),
+        _ => {}
     }
     ctx.out
         .hint("scaffold pieces with `midas add …`; start the flow with `midas flow start`");

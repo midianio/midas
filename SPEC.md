@@ -91,7 +91,7 @@ binary and its internal contract kernel) — all moving on one SemVer git tag. C
 | --- | --- | --- |
 | **`standards/`** | Versioned markdown: rules, rationale, canonical-code citations, enforcement tier. | Read by humans + agents; the managed block ([§8](#8-enforcement)) points each repo here. |
 | **`registry/`** | `conventions.json` (ID → metadata, escape policy, enforcement tier, check id); codemod manifests later. | **Embedded into the `midas` binary** at build; drives `check`. |
-| **`templates/`** | Runnable skeletons (`rust-service` built; `svelte-app` next), embedded in the binary. | Laid down by `midas new --profile <p>`. |
+| **`templates/`** | Runnable skeletons (`rust-service` + `svelte-app`, built & verified), embedded in the binary. | Laid down by `midas new --profile <p>`. |
 | **`packages/`** | Home for **graduated** shared seams — empty until a behavioral seam earns it. Seams start **vendored-with-provenance** in each consumer, graduating by evidence. | Vendored seams copied + provenance-stamped; a graduated package imported via a **git-tag pin** ([§7](#shared-code--packages)). |
 | **`cli/` → `midas`** | One Rust binary (absorbs midflow), built on its internal `core` contract kernel. The single one-stop CLI. | Run by humans; called by agents/skills. |
 
@@ -137,7 +137,7 @@ CLI standard, [`standards/cli/`](./standards/cli/)).
 | `midas doctor` | Diagnose the dev environment. | **shipped** |
 | `midas add state\|migration\|component\|module` | Stamp a conventional piece — deterministic bytes (the `add-*` skills promoted to commands). `module` scaffolds the 4-file backend module + wires `pub mod` into `modules/mod.rs`. | **shipped** |
 | `midas add handler\|pane\|…` | The remaining kinds. | next |
-| `midas new <name> --profile <p>` | Scaffold a conformant project: `midas.toml` (version-pinned), agent docs with the synced block, starter CI, dir shape — and for `service`, the runnable `rust-service` skeleton. `svelte-app` (App frontend) next. | **shipped** |
+| `midas new <name> --profile <p>` | Scaffold a conformant project: `midas.toml` (version-pinned), agent docs with the synced block, starter CI, dir shape — plus runnable skeletons: `rust-service` (`service`) and `rust-service` + `svelte-app` (`app`). | **shipped** |
 | `midas setup` / `midas teardown` | Bootstrap / tear down local dev (deps, pscale proxy, env, hooks). | later |
 | `midas gen types` | Regenerate the TS client from the backend OpenAPI. | later |
 | `midas upgrade [--to <ver>]` | Move to a newer standard version; run codemods; report residuals. | deferred |
@@ -367,7 +367,7 @@ pass them.
 | --- | --- | --- |
 | **0 · Extract** | This spec; backend docs **split** into `backend/` + `playbooks/go-to-rust.md`; frontend, CLI, process, agents docs; seed `registry/conventions.json`. | `standards/` is the readable source of truth; midian + prayer practice catalogued. |
 | **1 · Observe** | `midas check` (read-only) against **both midian and prayer**; `midas.toml` in each, pinning 0.1. No enforcement. | `check` runs clean (or every failure ledgered) on both — the disagreements are the signal. |
-| **2 · Scaffold + CLI** | Build `midas` in Rust: `midas flow` (ported midflow), mechanical `midas check`, `midas sync`, `midas doctor`, `midas add` (`state`/`migration`/`component`/`module`), and `midas new` (profile-based project init, which lays down the runnable `rust-service` skeleton) **shipped** on the internal `core` contract kernel; the `svelte-app` template is next. | Human + agent scaffold a piece via the identical command. |
+| **2 · Scaffold + CLI** | Build `midas` in Rust: `midas flow` (ported midflow), mechanical `midas check`, `midas sync`, `midas doctor`, `midas add` (`state`/`migration`/`component`/`module`), and `midas new` (profile-based project init, which lays down runnable `rust-service` + `svelte-app` skeletons) **shipped** on the internal `core` contract kernel. | Human + agent scaffold a piece via the identical command. |
 | **3 · Share** | Every shared seam **vendored-with-provenance**, drift-flagged; a seam graduates from a vendored copy to a real `packages/` package only on evidence (stable across both consumers). | A vendored-seam divergence is flagged in both consumers; the first seam graduates. |
 | **4 · Reconcile** *(deferred)* | `midas upgrade` + codemods; the external review agent wired against `midas check --json` (no in-binary adapter). | A version bump carries both projects forward with one command. |
 | **5 · Prayer ports** | prayer re-runs `playbooks/go-to-rust.md` → its backend conforms to `backend/`. | The migration playbook is validated by a second run; the backend standard has two conformant consumers. |
@@ -405,7 +405,7 @@ midas/
 │   ├── process.md           ← L4
 │   ├── agents.md            ← L5
 │   └── playbooks/go-to-rust.md   ← reusable migration method (prayer re-runs)
-├── templates/               ← rust-service/ (built) · svelte-app/ (→ next)   embedded in the binary
+├── templates/               ← rust-service/ · svelte-app/ (both built)       embedded in the binary
 ├── packages/                ← graduated shared seams (empty until a seam earns it)
 ├── cli/                     ← the `midas` binary + internal core kernel (cli/src/core/)   (built)
 └── registry/                ← conventions.json (codemods later) — embedded in the binary  (built)

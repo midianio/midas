@@ -178,7 +178,7 @@ runs `codemods/<from>-<to>/`.
    deviation for a `hard` rule).
 5. **`midas sync`** (managed-block writer) + **`midas doctor`**. ✅ built.
 6. **`midas add`** — deterministic scaffolding. ✅ built (`state`·`migration`·`component`·`module` — `module` writes the 4-file backend skeleton + wires `pub mod`); `handler`/`pane` ⬜ next.
-6b. **`midas new`** — whole-project scaffold (`midas.toml` + agent docs + CI + dir shape, profile-aware), embedding the runnable `rust-service` skeleton for `--profile service`. ✅ built; the `svelte-app` template ⬜ next.
+6b. **`midas new`** — whole-project scaffold (`midas.toml` + agent docs + CI + dir shape, profile-aware), embedding the runnable `rust-service` (`--profile service`) and `svelte-app` (`--profile app`) skeletons. ✅ built & verified.
 7. **`midas upgrade` + codemods.** ⏸ deferred (fleet-scale; build-trigger is "the agent-first software
    factory becomes real"). The stable convention IDs + the `midas.toml` version pin are the cheap
    anchors kept meanwhile.

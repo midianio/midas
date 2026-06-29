@@ -350,6 +350,48 @@ fn new_scaffolds_conformant_project() {
 }
 
 #[test]
+fn new_app_scaffolds_backend_and_frontend() {
+    let dir = tempfile::tempdir().unwrap();
+    midas()
+        .args(["new", "shop", "--profile", "app"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let proj = dir.path().join("shop");
+
+    // app profile lays down BOTH the rust-service backend and the svelte-app frontend
+    for f in [
+        "app/api/src/main.rs",
+        "app/web/package.json",
+        "app/web/svelte.config.js",
+        "app/web/src/routes/+page.svelte",
+        "app/web/src/lib/utils.ts",
+        "app/web/src/lib/api.ts",
+        "app/web/src/lib/state/app.svelte.ts", // FE-0001 state dir must exist or the gate fails
+    ] {
+        assert!(proj.join(f).exists(), "missing {f}");
+    }
+    // {{NAME}} token substituted into the frontend package + page
+    let pkg = fs::read_to_string(proj.join("app/web/package.json")).unwrap();
+    assert!(
+        pkg.contains("\"name\": \"shop\""),
+        "NAME token unsubstituted"
+    );
+    assert!(!pkg.contains("{{"), "left an unsubstituted token");
+    // crypto.randomUUID lives only in utils.ts (FE-0010 allow_in) — the gate would fail otherwise
+    assert!(fs::read_to_string(proj.join("app/web/src/lib/utils.ts"))
+        .unwrap()
+        .contains("crypto.randomUUID"));
+
+    // both layers' mechanical checks pass on the freshly-scaffolded app
+    midas()
+        .args(["check", "--root"])
+        .arg(&proj)
+        .assert()
+        .success();
+}
+
+#[test]
 fn new_refuses_nonempty_dir() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("acme")).unwrap();
