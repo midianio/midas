@@ -38,7 +38,15 @@ async fn main() {
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".into());
     let addr = format!("0.0.0.0:{port}");
-    let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            // A clean message instead of a panic + backtrace — the common case is the port being
+            // taken by another instance. `PORT=<n> cargo run` (or the [dev] process env) overrides it.
+            tracing::error!("cannot bind {addr}: {e} — is something already using port {port}? set PORT to override");
+            std::process::exit(1);
+        }
+    };
     tracing::info!("listening on http://{addr}");
 
     axum::serve(listener, app)

@@ -106,14 +106,28 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
         }
     }
 
-    // Supervise: exit when Ctrl-C is pressed or every process has exited on its own.
+    // Supervise: announce each process as it exits (so a crash is visible, not silent); stop when
+    // Ctrl-C is pressed or every process has exited on its own.
+    let mut reported = vec![false; children.len()];
     loop {
         if shutdown.load(Ordering::SeqCst) {
             break;
         }
-        let all_done = children
-            .iter_mut()
-            .all(|(_, c)| matches!(c.try_wait(), Ok(Some(_))));
+        let mut all_done = true;
+        for (idx, (name, child)) in children.iter_mut().enumerate() {
+            match child.try_wait() {
+                Ok(Some(status)) if !reported[idx] => {
+                    reported[idx] = true;
+                    match status.code() {
+                        Some(0) => ctx.out.info(format!("{name} exited (0)")),
+                        Some(c) => ctx.out.warn(format!("{name} exited ({c})")),
+                        None => ctx.out.warn(format!("{name} terminated by signal")),
+                    }
+                }
+                Ok(Some(_)) => {} // already reported
+                _ => all_done = false,
+            }
+        }
         if all_done {
             break;
         }
