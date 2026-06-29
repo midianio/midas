@@ -429,7 +429,6 @@ dependencies = [
  "clap",
  "globset",
  "ignore",
- "midian-cli",
  "predicates",
  "regex",
  "serde",
@@ -437,21 +436,9 @@ dependencies = [
  "tempfile",
  "toml",
  "tracing",
+ "tracing-subscriber",
  "trycmd",
  "walkdir",
-]
-
-[[package]]
-name = "midian-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "serde",
- "serde_json",
- "toml",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

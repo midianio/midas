@@ -1,4 +1,4 @@
-use crate::output::Output;
+use crate::core::output::Output;
 use std::fmt;
 
 /// Result type every command returns. `Ok(())` → exit 0.

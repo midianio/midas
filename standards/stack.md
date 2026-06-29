@@ -35,6 +35,6 @@ a stated swap condition — the escape hatch. Deviation is `ledgered` (record it
 
 ## Versions
 
-Pinned versions live in the `templates/` skeletons and the `packages/` manifests, not here — this doc
+Pinned versions live in the `templates/` skeletons and the Cargo/npm manifests, not here — this doc
 names the *choice*, the templates name the *version*, and `midas upgrade` moves versions forward. (Keeps
 this doc from rotting every dependency bump.)

@@ -1,5 +1,7 @@
 //! `midas flow` — the ported midflow release/branch flow.
 
+use crate::core::exit::{CliError, CliResult};
+use crate::core::{prompt_line, Ctx};
 use crate::flow::config::{
     pscale_branch_from_git, seed_by_default, slugify, valid_branch_type, validate_slug,
     BRANCH_TYPES,
@@ -8,8 +10,6 @@ use crate::flow::state::ActiveState;
 use crate::flow::{env, gh, git, pscale, FlowConfig};
 use crate::manifest::Manifest;
 use clap::Subcommand;
-use midian_cli::exit::{CliError, CliResult};
-use midian_cli::{prompt_line, Ctx};
 use serde_json::json;
 
 #[derive(Subcommand)]

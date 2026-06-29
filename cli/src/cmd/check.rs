@@ -3,10 +3,10 @@
 //! invokes this with `--json` and reads `standards/` (see `SPEC.md §8`); the binary does not run them.
 
 use crate::checks::{Finding, Scanner};
+use crate::core::exit::{CliError, CliResult};
+use crate::core::Ctx;
 use crate::manifest::Manifest;
 use crate::registry::{CheckSpec, Convention, Escape, Registry, Tier};
-use midian_cli::exit::{CliError, CliResult};
-use midian_cli::Ctx;
 use serde::Serialize;
 use serde_json::json;
 use std::path::{Path, PathBuf};

@@ -1,7 +1,7 @@
 //! The `midas.toml` lockfile — typed model + loader. See `SPEC.md §7`.
 
+use crate::core::config::{find_up, load_toml};
 use anyhow::Result;
-use midian_cli::config::{find_up, load_toml};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

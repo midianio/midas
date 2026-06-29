@@ -1,5 +1,5 @@
-use crate::global::GlobalArgs;
-use crate::style::Style;
+use crate::core::global::GlobalArgs;
+use crate::core::style::Style;
 use serde::Serialize;
 use std::io::{IsTerminal, Write};
 

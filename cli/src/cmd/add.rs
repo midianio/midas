@@ -1,10 +1,10 @@
 //! `midas add` — deterministic scaffolding. Stamps conventional pieces as identical bytes so a
 //! human and an agent produce the same file (SPEC §5; the old `add-*` skills promoted to commands).
 
+use crate::core::exit::{CliError, CliResult};
+use crate::core::{prompt_line, Ctx};
 use crate::flow::config::slugify;
 use clap::Subcommand;
-use midian_cli::exit::{CliError, CliResult};
-use midian_cli::{prompt_line, Ctx};
 use serde_json::json;
 use std::path::PathBuf;
 

@@ -1,9 +1,9 @@
-use crate::exit::CliError;
-use crate::global::GlobalArgs;
-use crate::output::Output;
+use crate::core::exit::CliError;
+use crate::core::global::GlobalArgs;
+use crate::core::output::Output;
 use std::io::{BufRead, IsTerminal, Write};
 
-/// Free-text prompt with the same agent-safe contract as [`crate::confirm`]:
+/// Free-text prompt with the same agent-safe contract as [`crate::core::confirm`]:
 ///
 /// - interactive (TTY) → prompts on stderr, reads stdin; empty input takes `default` if any.
 /// - **not** a TTY → returns `default` if one was given, else a usage error (exit 3) so an agent

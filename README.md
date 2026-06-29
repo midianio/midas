@@ -28,9 +28,9 @@ code** (the midian Rust backend + Svelte frontend, and the `midflow` release CLI
 | `standards/process.md` | L4 — setup, CI, the midflow release flow, testing, migrations *(Phase 0)*. |
 | `standards/agents.md` | L5 — the AI/agent playbook (delivery + the semantic-review contract). |
 | `standards/playbooks/go-to-rust.md` | The reusable Go→Rust migration method *(prayer re-runs it; Phase 0)*. |
-| `cli/` | The `midas` binary — built: `flow`/`check`/`sync`/`doctor`/`add` on the `midian-cli` core *(blueprint in `cli/README.md`, live status in `BUILD.md`)*. |
+| `cli/` | The one-stop `midas` binary — built: `flow`/`check`/`sync`/`doctor`/`add`/`new` on its internal `core` contract kernel (`cli/src/core/`) *(blueprint in `cli/README.md`, live status in `BUILD.md`)*. |
 | `templates/` | Runnable project skeletons *(→ next)*. |
-| `packages/` | The shared `midian-cli` CLI core crate *(built)*; other behavioral seams vendored-with-provenance *(→ Phase 3 to graduate)*. |
+| `packages/` | Home for **graduated** shared seams — empty for now; behavioral seams start vendored-with-provenance in each consumer *(→ Phase 3 to graduate)*. |
 | `registry/` | Machine-readable convention catalog (`conventions.json`), embedded in the binary *(built; codemods later)*. |
 
 ## How a project consumes it
@@ -55,8 +55,8 @@ and ledgering intentional deviations. See `SPEC.md §5` (CLI), `§7` (drift/vers
 v1 (2026-06-25). Architecture resolved via a full design grill (see `SPEC.md`). **Phase 0 (extract)
 docs complete:** the spec; stack; backend (+ the Go→Rust playbook); frontend; CLI; process; and agent
 conventions; the CLI build blueprint; and the seed catalog (≈60 IDs with enforcement tiers).
-**Built (Phase 1–2):** a Cargo workspace producing the `midas` binary on the shared `midian-cli` core
-crate — `midas flow` (ported midflow), mechanical `midas check` (reads the embedded
+**Built (Phase 1–2):** a Cargo workspace producing the one-stop `midas` binary on its internal `core`
+contract kernel (`cli/src/core/`) — `midas flow` (ported midflow), mechanical `midas check` (reads the embedded
 `registry/conventions.json`; `banned-call` + `file-structure` kinds; gates CI at exit `2`),
 `midas sync`, `midas doctor`, and `midas add` (deterministic `state`/`migration`/`component`/`module`
 scaffolding — `module` writes the 4-file backend skeleton + wires `pub mod`). The repo dogfoods its
@@ -65,6 +65,6 @@ project (manifest + agent docs + CI + dir shape). The delegated semantic review 
 [`standards/review-agent-prompt.md`](./standards/review-agent-prompt.md). **Next:** runnable code
 `templates/` (rust-service / svelte-app). **Deferred:** `midas upgrade` /
 codemods; the in-binary semantic adapter (inverted — `midas check` is mechanical-only; the team's
-review agent invokes `midas check --json` + reads `standards/`); shared-package workspaces beyond
-`midian-cli` (vendor-with-provenance is the default). Nothing is enforced in a project until the
+review agent invokes `midas check --json` + reads `standards/`); shared-package workspaces
+(vendor-with-provenance is the default — nothing is shared up front, not even the CLI kernel). Nothing is enforced in a project until the
 conventions are real and both midian and prayer pass `midas check` — see `SPEC.md §10` and `BUILD.md`.

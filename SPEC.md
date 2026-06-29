@@ -65,16 +65,16 @@ existed; the `midflow`→`midas` port *defines* one ([`standards/cli/`](./standa
 
 ## 3. Architecture of the standard
 
-**`midas` is one versioned source** — docs, the machine-readable registry, the CLI source, **and the
-shared `midian-cli` core** — all moving on one SemVer git tag. Consumers pin that tag. (Codemods and
-further shared packages land later, [§7](#shared-code--packages).)
+**`midas` is one versioned source** — docs, the machine-readable registry, and the CLI source (the
+binary and its internal contract kernel) — all moving on one SemVer git tag. Consumers pin that tag.
+(Codemods and shared packages land later, [§7](#shared-code--packages).)
 
 ```
   ┌──────────────────────────  midas repo (the source of truth)  ──────────────────────────┐
   │  standards/   versioned conventions (the WHY)         registry/   machine-readable       │
   │  templates/   runnable project skeletons                 conventions.json (codemods later)     │
-  │  packages/    midian-cli core (shared); other seams vendored-with-provenance            │
-  │  cli/         the `midas` binary — EMBEDS its version's rules at build time              │
+  │  packages/    graduated shared seams (none yet); seams start vendored-with-provenance    │
+  │  cli/         the one-stop `midas` binary (+ internal core kernel) — EMBEDS its rules     │
   └──────────────────────────────────────────────────────────────────────────────────────────┘
         │ released as one tagged version  vX.Y.Z
         ▼
@@ -84,7 +84,7 @@ further shared packages land later, [§7](#shared-code--packages).)
   each project's  midas.toml   ── pins `midas = "X.Y.Z"`, ledgers deviations, declares stack state
         │ depends on (git-tag pins → midas repo @ vX.Y.Z)
         ▼
-  midian · prayer  ── depend on midian-cli, vendor other seams with provenance, run `midas flow/check/sync`
+  midian · prayer  ── run `midas flow/check/sync`; vendor shared seams with provenance
 ```
 
 | Artifact | What | How consumed |
@@ -92,8 +92,8 @@ further shared packages land later, [§7](#shared-code--packages).)
 | **`standards/`** | Versioned markdown: rules, rationale, canonical-code citations, enforcement tier. | Read by humans + agents; the managed block ([§8](#8-enforcement)) points each repo here. |
 | **`registry/`** | `conventions.json` (ID → metadata, escape policy, enforcement tier, check id); codemod manifests later. | **Embedded into the `midas` binary** at build; drives `check`. |
 | **`templates/`** | Runnable skeletons (rust-service, svelte-app, cli-tool). | `midas new <template>`. |
-| **`packages/`** | The shared `midian-cli` core crate (day one); other behavioral seams start **vendored-with-provenance**, graduating by evidence. | `midian-cli` imported via a **git-tag pin**; vendored seams copied + provenance-stamped ([§7](#shared-code--packages)). |
-| **`cli/` → `midas`** | One Rust binary (absorbs midflow). The executable spine. | Run by humans; called by agents/skills. |
+| **`packages/`** | Home for **graduated** shared seams — empty until a behavioral seam earns it. Seams start **vendored-with-provenance** in each consumer, graduating by evidence. | Vendored seams copied + provenance-stamped; a graduated package imported via a **git-tag pin** ([§7](#shared-code--packages)). |
+| **`cli/` → `midas`** | One Rust binary (absorbs midflow), built on its internal `core` contract kernel. The single one-stop CLI. | Run by humans; called by agents/skills. |
 
 **Copy the shape, depend on the mechanism — staged by readiness.** Prose conventions (how to
 structure a handler) ship as templates you copy and own. Behavioral seams ship as packages — but only
@@ -154,7 +154,7 @@ CLI standard, [`standards/cli/`](./standards/cli/)).
 Every `midas` command obeys the CLI standard's first commandment (`CLI-0001`): **non-interactive by
 default, `--json` with a stable schema, stdout=data / stderr=logs, typed exit codes.** An
 interactive-only command is invisible to agents — which defeats the entire point. Enforced by
-construction via a shared `midian-cli` core crate (clap derive) that `midas` is the first consumer of.
+construction via `midas`'s internal `core` contract kernel (clap derive), shared by every command.
 Full design: [`standards/cli/conventions.md`](./standards/cli/).
 
 ---
@@ -254,10 +254,12 @@ consulted by *authors* and by a future `midas upgrade` (to fetch the newer binar
 Behavioral seams are **vendored-with-provenance by default**, not shared up front — both midian and
 prayer are mid-port, so nothing is genuinely churn-free yet, and coupling cost scales with churn:
 
-- **`packages/midian-cli` is the one exception — shared from day one.** The CLI core crate every
-  midian CLI depends on (global flags, the `Output` writer, exit-code mapping, `confirm`, the config
-  loader). It's built and consumed by `midas` today.
-- **Everything else starts vendored.** Both the would-be primitives (`ids`/`generateId`, byte-exact
+- **Nothing is shared from day one** — not even the CLI contract. The agent-runnable kernel
+  (global flags, the `Output` writer, exit-code mapping, `confirm`, the config loader) lives *inside*
+  the one `midas` binary (`cli/src/core/`), not as a shared crate: `midas` is the single one-stop CLI,
+  so there's no second consumer to share it with. `packages/` starts **empty**; a seam lands there
+  only by graduating (below).
+- **Everything starts vendored.** Both the would-be primitives (`ids`/`generateId`, byte-exact
   SSE framing, the response envelope, `AppError`, the `Http` retry-tier client, the telemetry ports +
   scrub, `with_tx`, `Tasks`; frontend `generateId()`, platform detection, `screen`) *and* the
   still-moving seams (`access`, feature-gating, the `api<T>()` wrapper, the pane system) are copied
@@ -365,8 +367,8 @@ pass them.
 | --- | --- | --- |
 | **0 · Extract** | This spec; backend docs **split** into `backend/` + `playbooks/go-to-rust.md`; frontend, CLI, process, agents docs; seed `registry/conventions.json`. | `standards/` is the readable source of truth; midian + prayer practice catalogued. |
 | **1 · Observe** | `midas check` (read-only) against **both midian and prayer**; `midas.toml` in each, pinning 0.1. No enforcement. | `check` runs clean (or every failure ledgered) on both — the disagreements are the signal. |
-| **2 · Scaffold + CLI** | Build `midas` in Rust: `midas flow` (ported midflow), mechanical `midas check`, `midas sync`, `midas doctor`, `midas add` (`state`/`migration`/`component`/`module`), and `midas new` (profile-based project init) **shipped** on the `midian-cli` core; runnable code `templates/` next. | Human + agent scaffold a piece via the identical command. |
-| **3 · Share** | `packages/midian-cli` shared (git-tag dep); every other seam **vendored-with-provenance**, drift-flagged; a seam graduates to a package only on evidence. | The CLI core is shared; a vendored-seam divergence is flagged in both consumers. |
+| **2 · Scaffold + CLI** | Build `midas` in Rust: `midas flow` (ported midflow), mechanical `midas check`, `midas sync`, `midas doctor`, `midas add` (`state`/`migration`/`component`/`module`), and `midas new` (profile-based project init) **shipped** on the internal `core` contract kernel; runnable code `templates/` next. | Human + agent scaffold a piece via the identical command. |
+| **3 · Share** | Every shared seam **vendored-with-provenance**, drift-flagged; a seam graduates from a vendored copy to a real `packages/` package only on evidence (stable across both consumers). | A vendored-seam divergence is flagged in both consumers; the first seam graduates. |
 | **4 · Reconcile** *(deferred)* | `midas upgrade` + codemods; the external review agent wired against `midas check --json` (no in-binary adapter). | A version bump carries both projects forward with one command. |
 | **5 · Prayer ports** | prayer re-runs `playbooks/go-to-rust.md` → its backend conforms to `backend/`. | The migration playbook is validated by a second run; the backend standard has two conformant consumers. |
 
@@ -393,7 +395,7 @@ Still open:
 ```
 midas/
 ├── SPEC.md  README.md  BUILD.md
-├── Cargo.toml               ← workspace (midas binary + midian-cli core)     (built)
+├── Cargo.toml               ← workspace (one member: the midas binary)       (built)
 ├── standards/
 │   ├── README.md            ← layer map + seed catalog
 │   ├── stack.md             ← L1
@@ -404,8 +406,8 @@ midas/
 │   ├── agents.md            ← L5
 │   └── playbooks/go-to-rust.md   ← reusable migration method (prayer re-runs)
 ├── templates/               ← rust-service/ · svelte-app/ · cli-tool/        (→ next)
-├── packages/                ← midian-cli core (shared); other seams vendored-with-provenance (built: midian-cli)
-├── cli/                     ← the `midas` binary (absorbs midflow)           (built)
+├── packages/                ← graduated shared seams (empty until a seam earns it)
+├── cli/                     ← the `midas` binary + internal core kernel (cli/src/core/)   (built)
 └── registry/                ← conventions.json (codemods later) — embedded in the binary  (built)
 ```
 

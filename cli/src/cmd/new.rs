@@ -3,11 +3,11 @@
 //! (writes no code), so it never depends on an as-yet-unpublished shared crate (SPEC §7).
 
 use crate::cmd::sync::managed_block;
+use crate::core::exit::{CliError, CliResult};
+use crate::core::{prompt_line, Ctx};
 use crate::flow::config::slugify;
 use crate::registry::Registry;
 use clap::ValueEnum;
-use midian_cli::exit::{CliError, CliResult};
-use midian_cli::{prompt_line, Ctx};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 

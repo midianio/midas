@@ -1,4 +1,4 @@
-use crate::global::GlobalArgs;
+use crate::core::global::GlobalArgs;
 
 /// Initialize `tracing` to **stderr** (CLI-0003/0009): logs never pollute a `--json` stdout parse.
 /// Level: `--quiet` → error, default → info, `-v` → debug, `-vv` → trace. `RUST_LOG` overrides.

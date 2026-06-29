@@ -2,36 +2,35 @@
 
 The implementation sketch for the `midas` binary. Design rules: `SPEC.md §5` (surface), `§7` (drift /
 embed / manifest), `§8` (enforcement). Conventions it must itself obey: `standards/cli/conventions.md`.
-This was the build blueprint; the core (`flow` / `check` / `sync` / `doctor` on the `midian-cli` core
-crate) is now built — see `BUILD.md` for live status. Deferred surfaces (`upgrade` / codemods,
+This was the build blueprint; the core (`flow` / `check` / `sync` / `doctor` on the internal `core`
+contract kernel) is now built — see `BUILD.md` for live status. Deferred surfaces (`upgrade` / codemods,
 scaffolding, the semantic pass) remain indicative.
 
 ## Crate layout
 
 ```
 midas/
-├── Cargo.toml                # workspace (cli + packages/midian-cli)
-├── cli/                      # the `midas` binary
+├── Cargo.toml                # workspace (one member: cli)
+├── cli/                      # the one-stop `midas` binary
 │   ├── Cargo.toml            # [[bin]] name = "midas"
 │   ├── build.rs              # embeds registry/conventions.json + managed-block templates + git tag as version
 │   └── src/
 │       ├── main.rs           # clap derive root; dispatch; map Outcome/Error → exit code
 │       ├── manifest.rs       # typed midas.toml loader
 │       ├── registry.rs       # embedded conventions.json model
+│       ├── core/             # the CLI contract kernel — built
+│       │   └── {global,output,exit,confirm,prompt,config,style,log}.rs + mod.rs
 │       ├── flow/             # ported midflow (git, gh, pscale, state, env, config)
 │       ├── checks/           # mechanical check kinds (banned-call, file-structure; rest deferred)
-│       └── cmd/{flow,check,sync,doctor}.rs   # shipped · add/new next · upgrade/gen deferred
-├── packages/
-│   └── midian-cli/           # shared core crate (every midian CLI depends on this) — built
-│       └── src/{global,output,exit,confirm,prompt,config,style,log}.rs
+│       └── cmd/{flow,check,sync,doctor,add,new}.rs   # shipped · upgrade/gen deferred
 └── registry/                 # conventions.json (embedded at build); codemods later
 ```
 
-`midas` depends on `midian-cli` for everything in `standards/cli` (global flags, `Output` writer,
-exit-code mapping, `confirm`, config loader, tty/color, tracing). So the agent-runnable contract is
-inherited, not re-implemented.
+`midas` builds every command on its internal `core` kernel for everything in `standards/cli` (global
+flags, `Output` writer, exit-code mapping, `confirm`, config loader, tty/color, tracing). So the
+agent-runnable contract is enforced once, centrally, not re-implemented per command.
 
-## Global flags (from `midian-cli`)
+## Global flags (from the `core` kernel)
 
 `--json` · `--yes` · `--quiet` · `--verbose` · `--no-color`. Every subcommand inherits them.
 
@@ -168,8 +167,8 @@ runs `codemods/<from>-<to>/`.
 
 ## Build order
 
-1. **`midian-cli` core** — global flags, `Output`, exit-code mapping, `confirm`, config loader, tty,
-   tracing. (Locks `standards/cli` `CLI-0001…0005` by construction.) ✅ built.
+1. **`core` kernel** (`cli/src/core/`) — global flags, `Output`, exit-code mapping, `confirm`, config
+   loader, tty, tracing. (Locks `standards/cli` `CLI-0001…0005` by construction.) ✅ built.
 2. **`midas flow`** — port `scripts/midflow` (Go) faithfully into Rust subcommands; lift its hardcoded
    config into `[flow]`. (Defines the CLI standard in practice.) ✅ built (start·sync·pr·hotfix·tag·db·doctor).
 3. **embed** `registry/conventions.json` + version via `build.rs`. ✅ built.

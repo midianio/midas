@@ -1,17 +1,18 @@
 mod checks;
 mod cmd;
+mod core;
 mod flow;
 mod manifest;
 mod proc;
 mod registry;
 
+use crate::core::exit::{finish, CliResult};
+use crate::core::{Ctx, GlobalArgs};
 use clap::{Parser, Subcommand};
 use cmd::add::AddCmd;
 use cmd::flow::FlowCmd;
 use cmd::new::Profile;
 use manifest::Manifest;
-use midian_cli::exit::{finish, CliResult};
-use midian_cli::{Ctx, GlobalArgs};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -72,7 +73,7 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     let ctx = Ctx::new(cli.global);
-    midian_cli::log::init(&ctx.global);
+    crate::core::log::init(&ctx.global);
 
     let result: CliResult = (|| match cli.command {
         Commands::Flow { cmd } => {

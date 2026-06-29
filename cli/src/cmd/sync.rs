@@ -2,9 +2,9 @@
 //! (`CLAUDE.md`, `AGENTS.md`). Only the delimited region is touched; project content is untouched.
 //! `--check` reports drift (missing/stale block) without writing — exit 2 on drift.
 
+use crate::core::exit::{CliError, CliResult};
+use crate::core::Ctx;
 use crate::registry::Registry;
-use midian_cli::exit::{CliError, CliResult};
-use midian_cli::Ctx;
 use serde::Serialize;
 use serde_json::json;
 use std::path::PathBuf;

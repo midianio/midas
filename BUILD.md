@@ -8,16 +8,18 @@
 
 ## Target (v1)
 
-A Cargo workspace producing one static `midas` binary, built on a shared `midian-cli` core crate.
+A Cargo workspace (one member) producing one static `midas` binary, built on its internal `core`
+contract kernel.
 
 ```
 midas/
-├── Cargo.toml                 workspace
-├── packages/midian-cli/       core: agent-runnable contract (CLI-0001..0005 by construction)
-├── cli/                       the `midas` binary
+├── Cargo.toml                 workspace (one member: cli)
+├── cli/                       the one-stop `midas` binary
 │   ├── build.rs               embeds registry/conventions.json + stamps version
-│   └── src/{main, manifest, registry, flow/*, cmd/*, checks/*}
+│   └── src/{main, manifest, registry, core/*, flow/*, cmd/*, checks/*}
+│       └── core/              agent-runnable contract kernel (CLI-0001..0005 by construction)
 ├── registry/conventions.json  machine-readable catalog (mirror of standards/README.md)
+├── packages/                  graduated shared seams (empty until a seam earns it)
 └── templates/                 scaffolding skeletons (Phase 2)
 ```
 
@@ -25,7 +27,7 @@ midas/
 
 Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 
-### Core — `packages/midian-cli` ✅ (compiles, clippy-clean)
+### Core kernel — `cli/src/core/` ✅ (compiles, clippy-clean)
 - ✅ `global.rs` GlobalArgs (`--json/--yes/--quiet/--verbose/--no-color`)
 - ✅ `output.rs` Output writer (data→stdout, logs/progress→stderr, `--json`)
 - ✅ `exit.rs` CliError → exit codes 0/1/2/3/4
@@ -83,9 +85,10 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 
 ### COMPLETE for the agreed scope (4 autonomous loop rounds). Surface: flow · add · new · check · sync · doctor.
 Everything below needs a decision or touches another repo — NOT autonomous work:
-- **Runnable code `templates/`** (rust-service / svelte-app / cli-tool for `midas new`) — gated on the
-  deferred package-sharing decision (a generated Rust project needs `midian-cli`, which isn't published;
-  vendor vs git-tag-dep vs path-dep is a real choice, SPEC §7).
+- **Runnable code `templates/`** (rust-service / svelte-app for `midas new`) — the old blocker is
+  gone: folding the CLI kernel into `midas` means a generated **service** (axum/Svelte, not a CLI)
+  no longer needs to depend on a shared `midian-cli` crate. Scope/content of each skeleton is the
+  remaining open question. (A `cli-tool` template is dropped: `midas` is the single one-stop CLI.)
 - **`midas setup`/`teardown`** — midian-specific bootstrap (deps + pscale tunnel); needs the exact
   bootstrap steps to encode.
 - **artifact-hash / provenance-drift / clippy** check kinds — registry carries them; engine reports

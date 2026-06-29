@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["packages/midian-cli", "cli"]
+members = ["cli"]
 
 [workspace.package]
 edition = "2021"

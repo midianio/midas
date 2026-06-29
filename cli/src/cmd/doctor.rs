@@ -1,8 +1,8 @@
 //! `midas doctor` — diagnose the local dev environment. Ported from midflow's doctor.
 
+use crate::core::exit::{CliError, CliResult};
+use crate::core::Ctx;
 use crate::proc::{capture, on_path, try_capture};
-use midian_cli::exit::{CliError, CliResult};
-use midian_cli::Ctx;
 use serde::Serialize;
 use serde_json::json;
 

@@ -78,7 +78,7 @@ exhaustive; promotion of new entries follows `SPEC.md §9`.
 | CLI-0002 | Dual output: `--json` with a stable, documented schema on every data-returning command. | check | hard |
 | CLI-0003 | stdout = data, stderr = logs/progress/prompts. | check | hard |
 | CLI-0004 | Typed, documented exit codes (`0`/`1`/`2`/`3`/`4`). | check | hard |
-| CLI-0005 | Built on the shared `midian-cli` core crate (clap derive). | check | hard |
+| CLI-0005 | Built on one internal CLI contract kernel (`cli/src/core/`, clap derive); not re-implemented per command. | check | hard |
 | CLI-0006 | Project config read through the shared loader from `midas.toml`; no secrets in argv. | review | ledgered |
 | CLI-0007 | Single static binary (musl/rustls); the binary embeds its standard version. | review | advisory |
 | CLI-0008 | Snapshot-tested surface (`assert_cmd`/`trycmd`): output, `--json` schema, exit codes. | check | hard |

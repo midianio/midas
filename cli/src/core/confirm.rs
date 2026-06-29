@@ -1,6 +1,6 @@
-use crate::exit::CliError;
-use crate::global::GlobalArgs;
-use crate::output::Output;
+use crate::core::exit::CliError;
+use crate::core::global::GlobalArgs;
+use crate::core::output::Output;
 use std::io::{BufRead, IsTerminal, Write};
 
 /// The single confirmation chokepoint (CLI-0001). This is what makes "non-interactive by default"

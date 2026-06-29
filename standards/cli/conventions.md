@@ -1,17 +1,17 @@
 # CLI Conventions
 
 Portable conventions for Rust command-line tools. **Extracted by building `midas` itself** — `midas`
-is to CLIs what `app/api` is to services: the reference implementation the rules come from. The
-first instance is the `midflow`→`midas` port (a small Go release-flow CLI, reimplemented in Rust);
-every later midian CLI (`fetch-transcript`, future tools) follows this.
+is to CLIs what `app/api` is to services: the reference implementation the rules come from. It began
+as the `midflow`→`midas` port (a small Go release-flow CLI, reimplemented in Rust). `midas` is the
+**single one-stop CLI** for the project — new capabilities land as subcommands, not as separate tools.
 
-Canonical code: `midas/cli/` (the binary) + `midas/packages/midian-cli/` (the shared core crate).
+Canonical code: `midas/cli/` — the binary and its internal contract kernel (`cli/src/core/`).
 Strip the midas-specifics and keep the patterns. Entries are keyed `CLI-####` with an enforcement
 tier — `[check]` (mechanical) or `[review]` (semantic).
 
 ## Stack
 
-Rust · **clap** (derive) · the shared **`midian-cli`** core crate · `serde`/`serde_json` (for
+Rust · **clap** (derive) · the internal **`core`** contract kernel (`cli/src/core/`) · `serde`/`serde_json` (for
 `--json`) · `anyhow` (internal error context) → mapped to typed exit codes · `tracing` (to stderr) ·
 `assert_cmd`/`trycmd` (tests) · single static binary (musl) · `clippy -D warnings`.
 
@@ -45,26 +45,27 @@ first commandment, four parts, all `hard`:
   A script/agent branches on the code; `2` means "ran fine, answer is no/dirty" and is distinct from
   `1` "the tool broke". (Mirrors the backend parity harness's exit-code discipline.)
 
-These four are enforced **by construction**, not per-command discipline — see the core crate below.
+These four are enforced **by construction**, not per-command discipline — see the core kernel below.
 
-## The `midian-cli` core crate (`CLI-0005` `[check]`)
+## The `core` contract kernel (`CLI-0005` `[check]`)
 
-Every midian CLI is built on `midian-cli` (clap derive + the machinery that makes `CLI-0001…0004`
-structural). It owns:
+Every command is built on the internal `core` kernel (`cli/src/core/`; clap derive + the machinery
+that makes `CLI-0001…0004` structural) rather than re-implementing the contract per command. It owns:
 
 - **Global flags** every command inherits: `--json`, `--yes`, `--quiet`, `--verbose`, `--no-color`.
 - **An `Output` writer** — `out.data(value)` serializes to stdout as human text *or* `--json` per the
   flag; `out.progress(msg)`/`out.warn(msg)` go to stderr. A command never touches `println!` directly
   (clippy denies `print_stdout`/`print_stderr`, as in the backend).
 - **Exit-code mapping** — commands return a `Result<Outcome, CliError>`; the crate maps `Outcome` /
-  `CliError` to the typed codes above. Commands don't call `std::process::exit` themselves.
+  `CliError` to the typed codes above. Commands don't call `std::process::exit` themselves; only
+  `main` does, via the kernel's `finish()`.
 - **`confirm(prompt, flag)`** — prompts only when interactive; when `--yes` is set it returns true;
   when non-TTY and the flag is absent it errors with exit `3`. This is the single chokepoint that
   makes "non-interactive by default" impossible to forget.
 - **TTY + color detection**, `tracing` wired to stderr respecting `--quiet`/`--verbose`/`RUST_LOG`.
 - **The config loader** (below).
 
-Because the contract lives in the crate, a new command is agent-runnable the moment it compiles —
+Because the contract lives in the kernel, a new command is agent-runnable the moment it compiles —
 the same structural-correctness move as the backend's `response.rs`/`AppError`.
 
 ## Command structure (`CLI-0010` `[review]`)
@@ -85,7 +86,7 @@ the same structural-correctness move as the backend's `response.rs`/`AppError`.
 
 ## Errors, logging, secrets (`CLI-0009` `[check]`+`[review]`)
 
-- Internal errors carry `anyhow` context; the crate maps them to exit `1` and prints a single
+- Internal errors carry `anyhow` context; the kernel maps them to exit `1` and prints a single
   human-actionable line to stderr (full chain under `--verbose`).
 - Logs via `tracing` to **stderr** only; `--json` must never emit a non-JSON byte to stdout.
 - **Never** put a token/secret/PII in output or an error message `[review]`. No `print!`/`eprintln!`
@@ -116,6 +117,7 @@ flag path, writes logs to stdout, or returns `1` for an expected-negative result
 
 ## Reuse
 
-Project-agnostic minus the `midas`-specific commands. The `midian-cli` core crate is itself a shared
-package (`copy the shape, depend on the mechanism`) — every midian CLI depends on it, so the
-agent-runnable contract is enforced once, centrally, not re-litigated per tool.
+Project-agnostic minus the `midas`-specific commands. The `core` kernel (`cli/src/core/`) keeps the
+agent-runnable contract in one place, so it's enforced once, centrally, not re-litigated per command.
+A future Rust CLI elsewhere would copy this kernel's shape rather than depend on it — `midas` is the
+one CLI here, and the kernel is internal to its binary, not a shared package.

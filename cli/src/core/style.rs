@@ -1,5 +1,5 @@
 //! Minimal ANSI styling — no external dependency. The `color` flag is resolved once (from
-//! `--no-color` / `NO_COLOR` / TTY detection) in [`crate::output::Output::new`].
+//! `--no-color` / `NO_COLOR` / TTY detection) in [`crate::core::output::Output::new`].
 
 #[derive(Clone, Copy, Debug)]
 pub struct Style {

@@ -56,7 +56,7 @@
     { "id": "CLI-0002", "title": "Dual output: --json with a stable, documented schema on every data-returning command.", "layer": "cli", "tier": "check", "escape": "hard", "doc": "cli/conventions.md" },
     { "id": "CLI-0003", "title": "stdout = data, stderr = logs/progress/prompts.", "layer": "cli", "tier": "check", "escape": "hard", "doc": "cli/conventions.md" },
     { "id": "CLI-0004", "title": "Typed, documented exit codes (0/1/2/3/4).", "layer": "cli", "tier": "check", "escape": "hard", "doc": "cli/conventions.md" },
-    { "id": "CLI-0005", "title": "Built on the shared midian-cli core crate (clap derive).", "layer": "cli", "tier": "check", "escape": "hard", "doc": "cli/conventions.md" },
+    { "id": "CLI-0005", "title": "Built on one internal CLI contract kernel (clap derive); not re-implemented per command.", "layer": "cli", "tier": "check", "escape": "hard", "doc": "cli/conventions.md" },
     { "id": "CLI-0006", "title": "Project config read through the shared loader from midas.toml; no secrets in argv.", "layer": "cli", "tier": "review", "escape": "ledgered", "doc": "cli/conventions.md" },
     { "id": "CLI-0007", "title": "Single static binary (musl/rustls); the binary embeds its standard version.", "layer": "cli", "tier": "review", "escape": "advisory", "doc": "cli/conventions.md" },
     { "id": "CLI-0008", "title": "Snapshot-tested surface (assert_cmd/trycmd): output, --json schema, exit codes.", "layer": "cli", "tier": "check", "escape": "hard", "doc": "cli/conventions.md" },
