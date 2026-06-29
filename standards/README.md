@@ -30,7 +30,7 @@ exhaustive; promotion of new entries follows `SPEC.md §9`.
 | STK-0002 | Frontend = SvelteKit 2 + Svelte 5 runes; package manager = Bun. | check | ledgered |
 | STK-0003 | Native/PWA = Capacitor 8 via static-adapter switch. | review | ledgered (web-only) |
 | STK-0004 | Primary DB = PlanetScale/Vitess (MySQL); migrations forward-only. | check | ledgered |
-| STK-0005 | Auth = Clerk; telemetry = PostHog; deploy = Railway. | review | ledgered |
+| STK-0005 | Auth + billing = Clerk; telemetry = PostHog; deploy = Railway. | review | ledgered |
 
 ### Backend — `BE-` (full prose in [`backend/`](./backend/))
 | ID | Rule | Tier | Escape |

@@ -5,7 +5,7 @@
     { "id": "STK-0002", "title": "Frontend = SvelteKit 2 + Svelte 5 runes; package manager = Bun.", "layer": "stack", "tier": "check", "escape": "ledgered", "doc": "stack.md" },
     { "id": "STK-0003", "title": "Native/PWA = Capacitor 8 via static-adapter switch.", "layer": "stack", "tier": "review", "escape": "ledgered", "doc": "stack.md" },
     { "id": "STK-0004", "title": "Primary DB = PlanetScale/Vitess (MySQL); migrations forward-only.", "layer": "stack", "tier": "check", "escape": "ledgered", "doc": "stack.md" },
-    { "id": "STK-0005", "title": "Auth = Clerk; telemetry = PostHog; deploy = Railway.", "layer": "stack", "tier": "review", "escape": "ledgered", "doc": "stack.md" },
+    { "id": "STK-0005", "title": "Auth + billing = Clerk; telemetry = PostHog; deploy = Railway.", "layer": "stack", "tier": "review", "escape": "ledgered", "doc": "stack.md" },
 
     { "id": "BE-0001", "title": "Handlers are thin async fns returning Result<Json<T>, AppError>.", "layer": "backend", "stack": "rust", "tier": "review", "escape": "hard", "doc": "backend/conventions.md#be-0001" },
     { "id": "BE-0002", "title": "One wire envelope {data,code,timestamp,count}; helpers response::ok/ok_list.", "layer": "backend", "stack": "rust", "tier": "check", "escape": "hard", "doc": "backend/conventions.md#be-0002" },
