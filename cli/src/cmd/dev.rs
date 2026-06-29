@@ -63,6 +63,10 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
         ));
     }
 
+    // Preflight: a JS process whose deps aren't installed dies with `vite: command not found` (127).
+    // Install them once, up front, so `midas dev` works straight after `midas new`.
+    ensure_js_deps(ctx, &procs, &root)?;
+
     let color = !ctx.global.no_color
         && std::env::var_os("NO_COLOR").is_none()
         && std::io::stderr().is_terminal();
@@ -157,6 +161,50 @@ fn tunnel_branch(m: &Manifest, cfg: &FlowConfig) -> String {
         }
     }
     cfg.parent.clone()
+}
+
+/// Install JS deps before starting: any process whose cwd has a `package.json` but no `node_modules`
+/// gets a `bun install` first (each unique dir once). Runs synchronously with inherited stdio so the
+/// user sees install progress, and fails loudly — a missing `bun` or a failed install is a clearer
+/// stop than a downstream `command not found`.
+fn ensure_js_deps(ctx: &Ctx, procs: &[DevProcess], root: &Path) -> CliResult {
+    let mut installed: Vec<PathBuf> = Vec::new();
+    for p in procs {
+        let dir: PathBuf = match &p.cwd {
+            Some(c) => root.join(c),
+            None => root.to_path_buf(),
+        };
+        if !dir.join("package.json").exists() || dir.join("node_modules").exists() {
+            continue;
+        }
+        if installed.contains(&dir) {
+            continue;
+        }
+        installed.push(dir.clone());
+
+        let label = p.cwd.as_deref().unwrap_or(".");
+        ctx.out
+            .step(format!("installing deps in {label} (bun install)"));
+        let status = Command::new("bun")
+            .arg("install")
+            .current_dir(&dir)
+            .status()
+            .map_err(|e| {
+                CliError::tool(anyhow::anyhow!(
+                    "bun install in {label}: {e} — is bun installed? https://bun.sh"
+                ))
+            })?;
+        if !status.success() {
+            return Err(CliError::tool(anyhow::anyhow!(
+                "bun install failed in {label} ({})",
+                status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "signal".into())
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn spawn(p: &DevProcess, root: &Path) -> std::io::Result<Child> {
