@@ -1,0 +1,12 @@
+# midas governs itself (SPEC §9: dogfooding is the test).
+[standard]
+version = "0.1.0"
+profile = "cli"
+
+[stack]
+# A CLI/tooling repo: no frontend/backend app layers, so those conventions are N/A here.
+cli = { current = "rust" }
+
+[flow]
+# This repo's trunk is `main` (standalone; no dev/pscale split).
+trunk = "main"

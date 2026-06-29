@@ -1,0 +1,17 @@
+# Rust (cli/, packages/*)
+/target
+**/target
+Cargo.lock.bak
+
+# JS (packages/*, cli if TS)
+node_modules
+dist
+.turbo
+
+# generated
+*.tsbuildinfo
+.DS_Store
+
+# local env
+.env
+.env.local
