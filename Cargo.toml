@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
 members = ["cli"]
+# Template skeletons are standalone projects (each its own workspace), embedded into the binary via
+# include_str! — never built as part of the midas workspace.
+exclude = ["templates"]
 
 [workspace.package]
 edition = "2021"

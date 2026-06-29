@@ -312,7 +312,36 @@ fn new_scaffolds_conformant_project() {
         .unwrap()
         .contains("<!-- midas:"));
 
-    // the freshly-scaffolded project passes its own gate
+    // the service profile lays down the runnable rust-service skeleton under app/api/
+    for f in [
+        "app/api/Cargo.toml",
+        "app/api/src/main.rs",
+        "app/api/src/lib.rs",
+        "app/api/src/response.rs",
+        "app/api/src/error.rs",
+        "app/api/src/ids.rs",
+        "app/api/src/routes.rs",
+    ] {
+        assert!(proj.join(f).exists(), "missing {f}");
+    }
+    // project tokens are substituted: package name + crate path derive from the project name
+    let cargo = fs::read_to_string(proj.join("app/api/Cargo.toml")).unwrap();
+    assert!(
+        cargo.contains("name = \"acme-api\""),
+        "PKG token unsubstituted"
+    );
+    assert!(
+        !cargo.contains("{{"),
+        "left an unsubstituted token in Cargo.toml"
+    );
+    let main = fs::read_to_string(proj.join("app/api/src/main.rs")).unwrap();
+    assert!(main.contains("acme_api::"), "CRATE token unsubstituted");
+    // uuid lives only in ids.rs (BE-0016 allow_in) — the gate below would fail otherwise
+    assert!(fs::read_to_string(proj.join("app/api/src/ids.rs"))
+        .unwrap()
+        .contains("uuid::Uuid::new_v4"));
+
+    // the freshly-scaffolded project — code skeleton included — passes its own gate
     midas()
         .args(["check", "--root"])
         .arg(&proj)

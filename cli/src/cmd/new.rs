@@ -1,8 +1,10 @@
 //! `midas new` — scaffold a whole conformant project: `midas.toml` (version pinned to this binary),
-//! agent docs with the synced managed block, a starter CI, and the standard dir shape. Stack-agnostic
-//! (writes no code), so it never depends on an as-yet-unpublished shared crate (SPEC §7).
+//! agent docs with the synced managed block, a starter CI, and the standard dir shape. Code profiles
+//! also lay down a runnable, conformant skeleton (the `rust-service` template for `service`) that
+//! compiles and passes `midas check` out of the box.
 
 use crate::cmd::sync::managed_block;
+use crate::cmd::templates::{self, TemplateFile, RUST_SERVICE};
 use crate::core::exit::{CliError, CliResult};
 use crate::core::{prompt_line, Ctx};
 use crate::flow::config::slugify;
@@ -33,6 +35,15 @@ impl Profile {
             Profile::Cli => "cli",
             Profile::Library => "library",
             Profile::Pipeline => "pipeline",
+        }
+    }
+
+    /// The runnable code skeleton this profile lays down, if any (token-substituted at write time).
+    fn code_template(self) -> &'static [TemplateFile] {
+        match self {
+            Profile::Service => RUST_SERVICE,
+            // App also needs a frontend skeleton (svelte-app) before it's checkable — pending.
+            Profile::App | Profile::Cli | Profile::Library | Profile::Pipeline => &[],
         }
     }
 
@@ -82,14 +93,18 @@ pub fn run(
         .unwrap_or_else(|_| "0.0.0".into());
     let block = managed_block(&version);
 
-    let files: Vec<(&str, String)> = vec![
-        ("midas.toml", manifest_toml(&version, profile)),
-        ("README.md", readme(&name, profile)),
-        (".gitignore", GITIGNORE.to_string()),
-        ("CLAUDE.md", format!("# {name}\n\n{block}\n")),
-        ("AGENTS.md", format!("# {name}\n\n{block}\n")),
-        (".github/workflows/ci.yml", ci_yml(profile)),
+    let mut files: Vec<(String, String)> = vec![
+        ("midas.toml".into(), manifest_toml(&version, profile)),
+        ("README.md".into(), readme(&name, profile)),
+        (".gitignore".into(), GITIGNORE.to_string()),
+        ("CLAUDE.md".into(), format!("# {name}\n\n{block}\n")),
+        ("AGENTS.md".into(), format!("# {name}\n\n{block}\n")),
+        (".github/workflows/ci.yml".into(), ci_yml(profile)),
     ];
+    // Runnable code skeleton (token-substituted), for profiles that ship one.
+    for tf in profile.code_template() {
+        files.push((tf.path.to_string(), templates::render(tf.body, &name)));
+    }
 
     let mut created = Vec::new();
     for (rel, body) in &files {
@@ -103,7 +118,13 @@ pub fn run(
 
     ctx.out
         .success(format!("created project {name} ({})", profile.as_str()));
-    ctx.out.info(format!("cd {name} && midas check"));
+    if profile.code_template().is_empty() {
+        ctx.out.info(format!("cd {name} && midas check"));
+    } else {
+        ctx.out.info(format!(
+            "cd {name} && midas check && (cd app/api && cargo build)"
+        ));
+    }
     ctx.out
         .hint("scaffold pieces with `midas add …`; start the flow with `midas flow start`");
     ctx.out.data(

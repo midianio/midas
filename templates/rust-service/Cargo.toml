@@ -1,0 +1,36 @@
+# Scaffolded by `midas new --profile service`. Stack pinned to the midian standard (STK-0001:
+# axum 0.8 · tokio · sqlx 0.8 · utoipa). sqlx + utoipa are added when the service grows a database
+# (BE-0018) and an OpenAPI contract (BE-0014) — see the TODOs in src/.
+[package]
+name = "{{PKG}}"
+version = "0.1.0"
+edition = "2021"
+description = "A midian service (axum), scaffolded by `midas new`."
+
+# Own workspace so `cargo` here is isolated from any parent repo.
+[workspace]
+
+[lib]
+name = "{{CRATE}}"
+path = "src/lib.rs"
+
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }

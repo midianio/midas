@@ -46,7 +46,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 - ✅ `checks/` banned-call · file-structure (artifact-hash/provenance/clippy = deferred → Skipped)
 - ✅ `cmd/sync.rs` managed-block writer
 - ✅ `cmd/doctor.rs` env diagnosis
-- ⬜ `cmd/add.rs` + `cmd/new.rs` scaffolding (Phase 2)
+- ✅ `cmd/add.rs` + `cmd/new.rs` scaffolding; `cmd/templates.rs` embedded skeletons
 - ⏸ `cmd/gen.rs` TS types from OpenAPI
 
 ### Registry
@@ -56,8 +56,9 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
   mostly derived/dedup/consts) as false-positive-prone → correctly left `review`-tier.
 
 ### Tests ✅
-- ✅ 12 `assert_cmd` tests: `--help`, `--version`, `--json` shape (no stdout log noise), exit codes
-  0/2/3, doctor json, check clean/violation/ledgered, sync missing→present, add state/migration.
+- ✅ 16 `assert_cmd` tests: `--help`, `--version`, `--json` shape (no stdout log noise), exit codes
+  0/2/3, doctor json, check clean/violation/ledgered, sync missing→present, add state/migration/module,
+  new (incl. the rust-service skeleton + token substitution).
 
 ### Scaffolding ✅ (`midas add`)
 - ✅ `add state <name>` → `lib/state/<name>.svelte.ts` (FE-0001 singleton; Pascal/camel derived)
@@ -67,8 +68,20 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
      utoipa) **and** idempotent `pub mod <name>;` wiring into `modules/mod.rs` (`--no-wire` to skip)
 - ✅ `new <name> --profile app|service|cli|library|pipeline` → whole conformant project (`midas.toml`
      version-pinned, agent docs w/ synced block, starter CI, dir shape); refuses non-empty dir; the
-     scaffolded project passes its own `midas check`. Runnable code `templates/` still next.
-- ⬜ `add handler`/`pane`; code `templates/` (gated on package-sharing story, SPEC §7)
+     scaffolded project passes its own `midas check`. **Service profile also lays down the runnable
+     `rust-service` skeleton** (below).
+- ⬜ `add handler`/`pane`
+
+### Templates ✅ (`rust-service`) / ⬜ (`svelte-app`)
+- ✅ `templates/rust-service/` — minimal **conformant, compiling** axum service, embedded via
+     `include_str!` and laid down under `app/api/` by `midas new --profile service`. Distills the
+     canonical seams: `response` (BE-0002 envelope), `error` (BE-0003 `AppError`), `ids` (BE-0016).
+     Project tokens (`{{PKG}}`/`{{CRATE}}`) substituted at write time. **Verified end-to-end:** a
+     generated project passes `midas check` (3 backend checks green) **and** `cargo build` + `clippy
+     -D warnings` + runs (`/ping`→`pong`, `/hello`→ the envelope with a generated id).
+- ⬜ `svelte-app` (App profile frontend; needs the bun toolchain to verify a build) — next.
+- Notes: sqlx (BE-0018) + utoipa/OpenAPI (BE-0014) intentionally deferred in the starter (TODO'd in
+  the template) so it compiles with no DB/codegen; `cli-tool` template dropped (one-stop CLI).
 
 ### Reviewing (delegated semantic pass) ✅
 - ✅ `standards/review-agent-prompt.md` — turnkey, vendor-neutral prompt operationalizing the inverted
@@ -85,10 +98,10 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 
 ### COMPLETE for the agreed scope (4 autonomous loop rounds). Surface: flow · add · new · check · sync · doctor.
 Everything below needs a decision or touches another repo — NOT autonomous work:
-- **Runnable code `templates/`** (rust-service / svelte-app for `midas new`) — the old blocker is
-  gone: folding the CLI kernel into `midas` means a generated **service** (axum/Svelte, not a CLI)
-  no longer needs to depend on a shared `midian-cli` crate. Scope/content of each skeleton is the
-  remaining open question. (A `cli-tool` template is dropped: `midas` is the single one-stop CLI.)
+- **`svelte-app` template** (App profile frontend) — the `rust-service` template is **built and
+  verified** (above); `svelte-app` is the remaining one. It needs the bun/SvelteKit toolchain to
+  verify a real build, so it's the next slice rather than done. (A `cli-tool` template is dropped:
+  `midas` is the single one-stop CLI.)
 - **`midas setup`/`teardown`** — midian-specific bootstrap (deps + pscale tunnel); needs the exact
   bootstrap steps to encode.
 - **artifact-hash / provenance-drift / clippy** check kinds — registry carries them; engine reports

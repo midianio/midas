@@ -29,7 +29,7 @@ code** (the midian Rust backend + Svelte frontend, and the `midflow` release CLI
 | `standards/agents.md` | L5 — the AI/agent playbook (delivery + the semantic-review contract). |
 | `standards/playbooks/go-to-rust.md` | The reusable Go→Rust migration method *(prayer re-runs it; Phase 0)*. |
 | `cli/` | The one-stop `midas` binary — built: `flow`/`check`/`sync`/`doctor`/`add`/`new` on its internal `core` contract kernel (`cli/src/core/`) *(blueprint in `cli/README.md`, live status in `BUILD.md`)*. |
-| `templates/` | Runnable project skeletons *(→ next)*. |
+| `templates/` | Runnable project skeletons embedded into the binary *(`rust-service` built; `svelte-app` next)*. |
 | `packages/` | Home for **graduated** shared seams — empty for now; behavioral seams start vendored-with-provenance in each consumer *(→ Phase 3 to graduate)*. |
 | `registry/` | Machine-readable convention catalog (`conventions.json`), embedded in the binary *(built; codemods later)*. |
 
@@ -61,9 +61,11 @@ contract kernel (`cli/src/core/`) — `midas flow` (ported midflow), mechanical 
 `midas sync`, `midas doctor`, and `midas add` (deterministic `state`/`migration`/`component`/`module`
 scaffolding — `module` writes the 4-file backend skeleton + wires `pub mod`). The repo dogfoods its
 own `midas.toml` and `midas check` runs clean on it. `midas new <name>` scaffolds a whole conformant
-project (manifest + agent docs + CI + dir shape). The delegated semantic review is turnkey via
-[`standards/review-agent-prompt.md`](./standards/review-agent-prompt.md). **Next:** runnable code
-`templates/` (rust-service / svelte-app). **Deferred:** `midas upgrade` /
+project (manifest + agent docs + CI + dir shape) — and for `--profile service` lays down the
+**runnable `rust-service` skeleton** (a minimal conformant axum service that compiles and passes
+`midas check`). The delegated semantic review is turnkey via
+[`standards/review-agent-prompt.md`](./standards/review-agent-prompt.md). **Next:** the `svelte-app`
+template (App-profile frontend). **Deferred:** `midas upgrade` /
 codemods; the in-binary semantic adapter (inverted — `midas check` is mechanical-only; the team's
 review agent invokes `midas check --json` + reads `standards/`); shared-package workspaces
 (vendor-with-provenance is the default — nothing is shared up front, not even the CLI kernel). Nothing is enforced in a project until the

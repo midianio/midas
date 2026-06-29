@@ -4,3 +4,4 @@ pub mod doctor;
 pub mod flow;
 pub mod new;
 pub mod sync;
+pub mod templates;
