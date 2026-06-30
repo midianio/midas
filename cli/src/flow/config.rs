@@ -179,8 +179,12 @@ mod tests {
 
     #[test]
     fn local_guard_accepts_loopback_rejects_remote() {
-        assert!(is_local_mysql_url("mysql://root@127.0.0.1:3309/app?ssl-mode=DISABLED"));
+        assert!(is_local_mysql_url(
+            "mysql://root@127.0.0.1:3309/app?ssl-mode=DISABLED"
+        ));
         assert!(is_local_mysql_url("mysql://root@localhost:3309/app"));
-        assert!(!is_local_mysql_url("mysql://user:pass@aws.connect.psdb.cloud:3306/app"));
+        assert!(!is_local_mysql_url(
+            "mysql://user:pass@aws.connect.psdb.cloud:3306/app"
+        ));
     }
 }

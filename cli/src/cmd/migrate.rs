@@ -25,7 +25,11 @@ pub fn run(ctx: &Ctx, cmd: MigrateCmd) -> CliResult {
     let cwd = std::env::current_dir().map_err(CliError::tool)?;
     let (manifest, root) = match Manifest::find(&cwd).map_err(CliError::tool)? {
         Some((m, r)) => (m, r),
-        None => return Err(CliError::usage("no midas.toml found — run from a midas project")),
+        None => {
+            return Err(CliError::usage(
+                "no midas.toml found — run from a midas project",
+            ))
+        }
     };
     let cfg = FlowConfig::from_manifest(&manifest);
     let url = resolve_url(ctx, &cfg)?;
@@ -52,8 +56,10 @@ pub fn apply_pending(ctx: &Ctx, manifest: &Manifest, root: &Path) -> CliResult {
     if report.newly_applied.is_empty() {
         ctx.out.step("migrations up to date");
     } else {
-        ctx.out
-            .success(format!("applied {} migration(s)", report.newly_applied.len()));
+        ctx.out.success(format!(
+            "applied {} migration(s)",
+            report.newly_applied.len()
+        ));
     }
     Ok(())
 }
