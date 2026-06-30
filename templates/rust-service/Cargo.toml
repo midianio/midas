@@ -2,7 +2,7 @@
 name = "{{PKG}}"
 version = "0.1.0"
 edition = "2021"
-description = "A midian service (axum), scaffolded by `midas new`."
+description = "A midian service (axum), scaffolded by `midas touch project`."
 
 [workspace]
 
@@ -33,7 +33,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
 # Outbound HTTP seam (BE-0010): one pooled reqwest client, rustls (no OpenSSL → clean musl build).
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-# `macros` gives the `FromRow` derive (used by `midas add module`) + the `query!` macros; it needs no
+# `macros` gives the `FromRow` derive (used by `midas touch module`) + the `query!` macros; it needs no
 # database to build. Modules use the runtime-checked `query_as::<_, T>("…")` form, so the service
 # compiles with no DB. Switch to compile-checked `query_as!` + a committed `.sqlx` cache later (BE-0018).
 sqlx = { version = "0.8", default-features = false, features = [

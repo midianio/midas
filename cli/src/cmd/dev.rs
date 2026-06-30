@@ -64,7 +64,7 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
     }
 
     // Preflight: a JS process whose deps aren't installed dies with `vite: command not found` (127).
-    // Install them once, up front, so `midas dev` works straight after `midas new`.
+    // Install them once, up front, so `midas dev` works straight after `midas touch project`.
     ensure_js_deps(ctx, &procs, &root)?;
 
     let color = !ctx.global.no_color
@@ -98,12 +98,24 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
         ctx.out.info(format!("started {}", p.name));
         children.push((p.name.clone(), child));
 
-        // Gate the rest of the processes on the tunnel actually listening.
+        // Gate the rest of the processes on the tunnel actually listening, then bring the schema up
+        // to date before the app starts (so a fresh/seeded branch has its migrations applied).
         if i == 0 {
             if let Some(port) = tunnel_port {
-                if !wait_for_port(port, Duration::from_secs(20), &shutdown) {
+                if wait_for_port(port, Duration::from_secs(20), &shutdown) {
+                    if manifest.dev.migrate {
+                        if let Err(e) = crate::cmd::migrate::apply_pending(ctx, &manifest, &root) {
+                            ctx.out.error(format!("migrate: {e}"));
+                            teardown(&group_pids, &mut children);
+                            for r in readers {
+                                let _ = r.join();
+                            }
+                            return Err(e);
+                        }
+                    }
+                } else {
                     ctx.out.warn(format!(
-                        "tunnel port :{port} not ready after 20s — starting anyway"
+                        "tunnel port :{port} not ready after 20s — starting anyway (skipped migrations)"
                     ));
                 }
             }

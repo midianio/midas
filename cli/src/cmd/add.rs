@@ -1,81 +1,44 @@
-//! `midas add` — deterministic scaffolding. Stamps conventional pieces as identical bytes so a
-//! human and an agent produce the same file (SPEC §5; the old `add-*` skills promoted to commands).
+//! Deterministic scaffolding for conventional pieces — stamps identical bytes so a human and an
+//! agent produce the same file (SPEC §5). These are the piece-level kinds behind `midas touch`
+//! (`touch module|state|migration|component`); `cmd::touch` is the front door.
 
 use crate::core::exit::{CliError, CliResult};
 use crate::core::{prompt_line, Ctx};
 use crate::flow::config::slugify;
-use clap::Subcommand;
 use serde_json::json;
 use std::path::PathBuf;
 
-#[derive(Subcommand)]
-pub enum AddCmd {
-    /// A Svelte runes state singleton (FE-0001) in lib/state/<name>.svelte.ts.
-    State {
-        /// Domain name, e.g. `notes-pane`
-        name: Option<String>,
-        /// Override the target directory (default: app/web/src/lib/state)
-        #[arg(long)]
-        dir: Option<String>,
-        #[arg(long)]
-        force: bool,
-    },
-    /// A forward-only numbered migration (OPS-0008) in db/migrations/NNN_<slug>.sql.
-    Migration {
-        /// Migration slug, e.g. `add-notes-index`
-        slug: Option<String>,
-        #[arg(long)]
-        dir: Option<String>,
-        #[arg(long)]
-        force: bool,
-    },
-    /// A Svelte 5 component (FE-0011) in lib/components/<Name>.svelte (or components/ui with --ui).
-    Component {
-        /// Component name, e.g. `notes-toolbar`
-        name: Option<String>,
-        /// Override the target directory
-        #[arg(long)]
-        dir: Option<String>,
-        /// Place under components/ui/ (a reusable UI primitive)
-        #[arg(long)]
-        ui: bool,
-        #[arg(long)]
-        force: bool,
-    },
-    /// A backend feature module (BE-0001/0002/0004/0008): modules/<name>/{mod,handler,service,model}.rs
-    /// + a `pub mod <name>;` registration. Conformant-by-construction skeleton.
-    Module {
-        /// Module name, e.g. `billing`
-        name: Option<String>,
-        /// Override the modules directory (default: app/api/src/modules)
-        #[arg(long)]
-        dir: Option<String>,
-        /// Don't append `pub mod <name>;` to modules/mod.rs
-        #[arg(long)]
-        no_wire: bool,
-        #[arg(long)]
-        force: bool,
-    },
+/// `touch state` — a Svelte runes state singleton (FE-0001) in lib/state/<name>.svelte.ts.
+pub fn state(ctx: &Ctx, name: Option<String>, dir: Option<String>, force: bool) -> CliResult {
+    add_state(ctx, &repo_root(), name, dir, force)
 }
 
-pub fn run(ctx: &Ctx, cmd: AddCmd) -> CliResult {
-    let root = repo_root();
-    match cmd {
-        AddCmd::State { name, dir, force } => add_state(ctx, &root, name, dir, force),
-        AddCmd::Migration { slug, dir, force } => add_migration(ctx, &root, slug, dir, force),
-        AddCmd::Component {
-            name,
-            dir,
-            ui,
-            force,
-        } => add_component(ctx, &root, name, dir, ui, force),
-        AddCmd::Module {
-            name,
-            dir,
-            no_wire,
-            force,
-        } => add_module(ctx, &root, name, dir, no_wire, force),
-    }
+/// `touch migration` — a forward-only numbered migration (OPS-0008) in db/migrations/NNN_<slug>.sql.
+pub fn migration(ctx: &Ctx, slug: Option<String>, dir: Option<String>, force: bool) -> CliResult {
+    add_migration(ctx, &repo_root(), slug, dir, force)
+}
+
+/// `touch component` — a Svelte 5 component (FE-0011) in lib/components/<Name>.svelte (--ui → components/ui).
+pub fn component(
+    ctx: &Ctx,
+    name: Option<String>,
+    dir: Option<String>,
+    ui: bool,
+    force: bool,
+) -> CliResult {
+    add_component(ctx, &repo_root(), name, dir, ui, force)
+}
+
+/// `touch module` — a backend feature module (BE-0001/0002/0004/0008): modules/<name>/{mod,handler,
+/// service,model}.rs + a `pub mod <name>;` registration. Conformant-by-construction skeleton.
+pub fn module(
+    ctx: &Ctx,
+    name: Option<String>,
+    dir: Option<String>,
+    no_wire: bool,
+    force: bool,
+) -> CliResult {
+    add_module(ctx, &repo_root(), name, dir, no_wire, force)
 }
 
 fn repo_root() -> PathBuf {

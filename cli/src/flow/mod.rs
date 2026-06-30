@@ -5,7 +5,7 @@ pub mod config;
 pub mod env;
 pub mod gh;
 pub mod git;
+pub mod migrate;
 pub mod pscale;
-pub mod state;
 
 pub use config::FlowConfig;

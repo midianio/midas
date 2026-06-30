@@ -92,7 +92,7 @@ fn check_inside_repo() -> Check {
 fn check_pscale() -> Check {
     match on_path("pscale") {
         None => warn(
-            "pscale on PATH (only needed for `midas flow`)",
+            "pscale on PATH",
             "install with: brew install planetscale/tap/pscale",
         ),
         Some(p) => {

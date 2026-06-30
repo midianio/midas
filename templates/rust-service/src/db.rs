@@ -7,7 +7,7 @@ use sqlx::mysql::MySqlPoolOptions;
 use sqlx::MySqlPool;
 
 /// Connect a bounded MySQL pool. Forward-only migrations (STK-0004) live in `db/migrations/`
-/// (`midas add migration <slug>`).
+/// (`midas touch migration <slug>`).
 pub async fn connect(url: &str) -> Result<MySqlPool, sqlx::Error> {
     MySqlPoolOptions::new().max_connections(5).connect(url).await
 }

@@ -131,7 +131,7 @@ PWA/Capacitor (no server round-trip per view). Canonical: `state/panes.svelte.ts
   links and back/forward work without server routes. The catch-all `/app/[...nav]` route decodes it.
 - **Pane components are lazy-loaded through a registry** (`pane-registry.ts`): `type → () =>
   import(...)`, cached after first load. Adding a view = add a `PaneEntryType` + a registry entry +
-  the component. (`midas add pane` should stamp all three.)
+  the component. (`midas touch pane` should stamp all three.)
 - `/app/*` is `ssr = false`; marketing/auth/legal under `(public)/` stay SSR'd for SEO/OG.
 
 ## Components & design system

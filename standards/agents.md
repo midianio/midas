@@ -21,8 +21,8 @@ its own `AGENTS.md`, `.cursor`). The standard injects shared guidance **without 
   ```
   <!-- midas:0.4.1 -->
   This repo conforms to the midas standard, pinned in midas.toml.
-  • Conventions are the source of truth: run `midas check` before a PR; scaffold with `midas add …`.
-  • Don't hand-roll what `midas add` stamps. Don't bypass the seams the conventions name.
+  • Conventions are the source of truth: run `midas check` before a PR; scaffold with `midas touch …`.
+  • Don't hand-roll what `midas touch` stamps. Don't bypass the seams the conventions name.
   • Any CLI you build follows standards/cli (agent-runnable: --json, non-interactive, typed exits).
   <!-- /midas -->
   ```
@@ -31,12 +31,12 @@ its own `AGENTS.md`, `.cursor`). The standard injects shared guidance **without 
   and points at the conventions; a stale or missing block is `check`-tier drift (`midas check` flags
   it; `midas sync` fixes it).
 - **The skill bundle ships versioned**, installed by `midas setup`: the `add-*` skills are **thin
-  wrappers that shell out to `midas add`**, plus the standard's review skill. Because the logic lives
+  wrappers that shell out to `midas touch`**, plus the standard's review skill. Because the logic lives
   in the binary, the bundle is tiny and rarely changes (`SPEC.md §5`).
 
 ## Rules for an authoring agent
 
-- **`AGT-0002` Scaffold through `midas add`, never hand-roll `[review]`.** A new handler/module/state/
+- **`AGT-0002` Scaffold through `midas touch`, never hand-roll `[review]`.** A new handler/module/state/
   migration/pane is created by the command, so humans and agents emit identical structure. Hand-built
   scaffolding is the anti-pattern.
 - **`AGT-0003` `midas check` is clean (or ledgered) before a PR `[check]`.** Enforced in CI. Mechanical

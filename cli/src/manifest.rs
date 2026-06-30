@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 
 pub const MANIFEST_NAME: &str = "midas.toml";
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize, Default)]
 pub struct Manifest {
     #[serde(default)]
@@ -63,7 +67,6 @@ pub struct FlowCfg {
     pub pscale_region: Option<String>,
     pub tunnel_port: Option<u16>,
     pub api_env_local: Option<String>,
-    pub state_file: Option<String>,
     pub env_marker: Option<String>,
 }
 
@@ -75,6 +78,10 @@ pub struct DevCfg {
     /// Raise the pscale tunnel (using the `[flow]` org/db/port) before the processes start.
     #[serde(default)]
     pub tunnel: bool,
+    /// Apply pending `db/migrations/` once the tunnel is up, before the processes start. Only
+    /// meaningful with `tunnel = true`. Defaults to on; set `migrate = false` to opt out.
+    #[serde(default = "default_true")]
+    pub migrate: bool,
     /// Tunnel branch override; defaults to the paired branch for the current git branch, else the
     /// `[flow]` parent (`dev`).
     pub branch: Option<String>,

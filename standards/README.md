@@ -93,7 +93,7 @@ exhaustive; promotion of new entries follows `SPEC.md §9`.
 | OPS-0003 | Generated artifacts (`.sqlx`, OpenAPI, TS client) regenerated & committed (CI drift guard). | check | hard |
 | OPS-0004 | Destructive prod data ops are handed to a human with exact commands, not run by tooling/agents. | review | hard |
 | OPS-0005 | One-command bootstrap (`midas setup` owns install → tunnel → doctor). | check | advisory |
-| OPS-0006 | Local dev = pscale proxy + dotenv chain (`ENV_FILE`→`.env`→`.env.local`); midflow owns the `.env.local` tunnel block — don't hand-edit. | check | hard |
+| OPS-0006 | Local dev = pscale proxy + dotenv chain (`ENV_FILE`→`.env`→`.env.local`); `midas flow` owns the `.env.local` tunnel block — don't hand-edit. | check | hard |
 | OPS-0007 | Branch `<type>/<slug>` off `dev` (trunk); `main` = prod; tags semver. | check | ledgered |
 | OPS-0008 | Migrations forward-only, numbered `NNN_`, one DDL set/file, fix-forward. *(cross-ref BE-0007 — same rule, process view)* | check | hard |
 | OPS-0009 | Schema→prod only via a reviewed PlanetScale deploy request; never run `migrate` at prod. | review | hard |
@@ -106,7 +106,7 @@ exhaustive; promotion of new entries follows `SPEC.md §9`.
 | ID | Rule | Tier | Escape |
 | --- | --- | --- | --- |
 | AGT-0001 | The version-stamped `midas` managed block is present + current in `CLAUDE.md`/`AGENTS.md`/`.cursor`. | check | hard |
-| AGT-0002 | Scaffolding goes through `midas add`, never hand-rolled. | review | hard |
+| AGT-0002 | Scaffolding goes through `midas touch`, never hand-rolled. | review | hard |
 | AGT-0003 | `midas check` is clean (or ledgered) before a PR. | check | hard |
 | AGT-0004 | On conflict between a stale local doc and the pinned standard, the standard wins. | review | hard |
 | AGT-0005 | Use the seams the conventions name; don't reach around them. | review | hard |

@@ -1,5 +1,5 @@
 //! Runnable code skeletons, embedded into the binary (single static binary, no repo fetch — same
-//! `include_str!` approach as the convention registry). `midas new` lays a profile's template down,
+//! `include_str!` approach as the convention registry). `midas touch project` lays a profile's template down,
 //! substituting the project tokens below.
 //!
 //! Tokens in a template body:
@@ -99,6 +99,11 @@ pub const RUST_SERVICE: &[TemplateFile] = &[
     tf(
         "app/api/src/modules/items/handler.rs",
         include_str!("../../../templates/rust-service/src/modules/items/handler.rs"),
+    ),
+    // Forward-only migrations live at the project root (OPS-0008), applied by `midas migrate`.
+    tf(
+        "db/migrations/001_init.sql",
+        include_str!("../../../templates/rust-service/db/migrations/001_init.sql"),
     ),
 ];
 

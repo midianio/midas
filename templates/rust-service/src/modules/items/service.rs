@@ -10,7 +10,7 @@ use crate::ids;
 /// }
 /// ```
 ///
-/// (That's what `midas add module` scaffolds. Switch to `query_as!` + the committed `.sqlx` cache
+/// (That's what `midas touch module` scaffolds. Switch to `query_as!` + the committed `.sqlx` cache
 /// once you standardize on compile-checked queries — BE-0018.)
 pub fn list(user_id: &str) -> Vec<Item> {
     vec![Item { id: ids::generate(), user_id: user_id.to_string(), created_at: 0 }]

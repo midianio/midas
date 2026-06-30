@@ -36,12 +36,12 @@ code** (the midian Rust backend + Svelte frontend, and the `midflow` release CLI
 ## How a project consumes it
 
 ```sh
-midas flow pr                   # the release/branch flow (the ported midflow)            — shipped
+midas flow pr                   # release/branch flow: start·sync·pr·tag·end·status            — shipped
 midas check                     # mechanical lint vs the pinned standard; report drift     — shipped
                                 #   (review-tier conventions are delegated to your review agent)
 midas sync                      # refresh the version-stamped agent managed-block in this repo — shipped
-midas add module billing        # scaffold a conventional piece — state/migration/component/module — shipped
-midas new my-app --profile app  # scaffold a conformant project (midas.toml, agent docs, CI)   — shipped
+midas touch module billing        # scaffold a conventional piece — state/migration/component/module — shipped
+midas touch project my-app --profile app  # scaffold a conformant project (midas.toml, agent docs, CI)   — shipped
 midas upgrade                   # carry the project to a newer standard version via codemods — deferred
 ```
 
@@ -58,9 +58,9 @@ conventions; the CLI build blueprint; and the seed catalog (≈60 IDs with enfor
 **Built (Phase 1–2):** a Cargo workspace producing the one-stop `midas` binary on its internal `core`
 contract kernel (`cli/src/core/`) — `midas flow` (ported midflow), mechanical `midas check` (reads the embedded
 `registry/conventions.json`; `banned-call` + `file-structure` kinds; gates CI at exit `2`),
-`midas sync`, `midas doctor`, and `midas add` (deterministic `state`/`migration`/`component`/`module`
+`midas sync`, `midas doctor`, and `midas touch` (deterministic `state`/`migration`/`component`/`module`
 scaffolding — `module` writes the 4-file backend skeleton + wires `pub mod`). The repo dogfoods its
-own `midas.toml` and `midas check` runs clean on it. `midas new <name>` scaffolds a whole conformant
+own `midas.toml` and `midas check` runs clean on it. `midas touch project <name>` scaffolds a whole conformant
 project (manifest + agent docs + CI + dir shape) — and lays down **runnable, conformant skeletons**:
 `rust-service` (axum, `--profile service`) and `svelte-app` (SvelteKit/Svelte 5 runes, `--profile
 app`), each verified to pass `midas check` and build (cargo / bun). The delegated semantic review is

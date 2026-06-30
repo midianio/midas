@@ -9,9 +9,10 @@ mod registry;
 use crate::core::exit::{finish, CliResult};
 use crate::core::{Ctx, GlobalArgs};
 use clap::{Parser, Subcommand};
-use cmd::add::AddCmd;
 use cmd::flow::FlowCmd;
+use cmd::migrate::MigrateCmd;
 use cmd::new::Profile;
+use cmd::touch::TouchCmd;
 use manifest::Manifest;
 use std::path::PathBuf;
 
@@ -31,17 +32,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Release / branch flow: start · sync · pr · hotfix · tag · db · doctor (the ported midflow).
+    /// Release / branch flow: start · sync · pr · tag · end · status.
     Flow {
         #[command(subcommand)]
         cmd: FlowCmd,
     },
-    /// Scaffold a conventional piece (state · migration · component · module) as deterministic bytes.
-    Add {
+    /// Scaffold a conformant project or piece (project · module · state · migration · component).
+    Touch {
         #[command(subcommand)]
-        cmd: AddCmd,
+        cmd: TouchCmd,
     },
-    /// Scaffold a whole conformant project (midas.toml, agent docs, CI, dir shape).
+    /// Deprecated alias for `midas touch project`.
+    #[command(hide = true)]
     New {
         /// Project name
         name: Option<String>,
@@ -73,6 +75,12 @@ enum Commands {
         /// Run only these named processes (the tunnel always runs); default: all.
         only: Vec<String>,
     },
+    /// Apply forward-only migrations (`db/migrations/`) to the local tunnel, or show status.
+    Migrate {
+        /// Defaults to `apply` when omitted.
+        #[command(subcommand)]
+        cmd: Option<MigrateCmd>,
+    },
 }
 
 fn main() {
@@ -86,7 +94,7 @@ fn main() {
             let manifest = Manifest::find(&cwd)?.map(|(m, _)| m).unwrap_or_default();
             cmd::flow::run(&ctx, &manifest, cmd)
         }
-        Commands::Add { cmd } => cmd::add::run(&ctx, cmd),
+        Commands::Touch { cmd } => cmd::touch::run(&ctx, cmd),
         Commands::New {
             name,
             profile,
@@ -95,8 +103,9 @@ fn main() {
         } => cmd::new::run(&ctx, name, profile, dir, force),
         Commands::Check { root } => cmd::check::run(&ctx, root),
         Commands::Sync { check } => cmd::sync::run(&ctx, check),
-        Commands::Doctor => cmd::doctor::run(&ctx, false),
+        Commands::Doctor => cmd::doctor::run(&ctx, true),
         Commands::Dev { only } => cmd::dev::run(&ctx, only),
+        Commands::Migrate { cmd } => cmd::migrate::run(&ctx, cmd.unwrap_or(MigrateCmd::Apply)),
     })();
 
     std::process::exit(finish(&ctx.out, result));

@@ -1,4 +1,6 @@
-//! `midas flow` — the ported midflow release/branch flow.
+//! `midas flow` — the release/branch lifecycle: start · sync · pr · tag · end · status. Active state
+//! is derived from the current git branch (the paired pscale branch is `pscale_branch_from_git`), so
+//! there is no state file to keep in sync.
 
 use crate::core::exit::{CliError, CliResult};
 use crate::core::{prompt_line, Ctx};
@@ -6,7 +8,6 @@ use crate::flow::config::{
     pscale_branch_from_git, seed_by_default, slugify, valid_branch_type, validate_slug,
     BRANCH_TYPES,
 };
-use crate::flow::state::ActiveState;
 use crate::flow::{env, gh, git, pscale, FlowConfig};
 use crate::manifest::Manifest;
 use clap::Subcommand;
@@ -40,14 +41,6 @@ pub enum FlowCmd {
         #[arg(long)]
         body: Option<String>,
     },
-    /// Fast-path fix branch off the trunk.
-    Hotfix {
-        slug: Option<String>,
-        #[arg(long)]
-        with_data: bool,
-        #[arg(long)]
-        no_data: bool,
-    },
     /// Cut an annotated release tag from the trunk.
     Tag {
         /// Version, e.g. v0.4.0
@@ -56,28 +49,13 @@ pub enum FlowCmd {
         #[arg(long)]
         message: Option<String>,
     },
-    /// Operate on the active pscale branch / tunnel.
-    Db {
-        #[command(subcommand)]
-        cmd: DbCmd,
-    },
-    /// Check your local flow setup (git/gh/pscale auth).
-    Doctor,
-}
-
-#[derive(Subcommand)]
-pub enum DbCmd {
-    /// Open the pscale tunnel for the active branch (foreground).
-    Connect,
-    /// Print active branch / tunnel state.
-    Status,
-    /// Switch back to parent; optionally delete the paired pscale branch.
+    /// Switch back to the parent branch; optionally delete the paired pscale branch.
     End {
         #[arg(long)]
         force: bool,
     },
-    /// Print the active pscale branch name.
-    CurrentBranch,
+    /// Print the active branch / paired pscale-branch state (--json for scripting).
+    Status,
 }
 
 const PR_TEMPLATE: &str = "## What\n- %s\n\n## Why\n-\n\n## Test plan\n- [ ] ran locally\n- [ ] tested on mobile viewport (if UI)\n- [ ] type-check + lint pass\n";
@@ -90,34 +68,15 @@ pub fn run(ctx: &Ctx, manifest: &Manifest, cmd: FlowCmd) -> CliResult {
             slug,
             with_data,
             no_data,
-        } => start(ctx, &cfg, branch_type, slug, with_data, no_data, None),
+        } => start(ctx, &cfg, branch_type, slug, with_data, no_data),
         FlowCmd::Sync => sync(ctx, &cfg),
         FlowCmd::Pr { draft, title, body } => pr(ctx, &cfg, draft, title, body),
-        FlowCmd::Hotfix {
-            slug,
-            with_data,
-            no_data,
-        } => {
-            ctx.out.banner("Hotfix");
-            ctx.out
-                .warn("production is broken — add a regression test if you can.");
-            start(
-                ctx,
-                &cfg,
-                Some("fix".into()),
-                slug,
-                with_data,
-                no_data,
-                Some("fix"),
-            )
-        }
         FlowCmd::Tag { version, message } => tag(ctx, &cfg, version, message),
-        FlowCmd::Db { cmd } => db(ctx, &cfg, cmd),
-        FlowCmd::Doctor => crate::cmd::doctor::run(ctx, true),
+        FlowCmd::End { force } => end(ctx, &cfg, force),
+        FlowCmd::Status => status(ctx, &cfg),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn start(
     ctx: &Ctx,
     cfg: &FlowConfig,
@@ -125,7 +84,6 @@ fn start(
     slug: Option<String>,
     with_data: bool,
     no_data: bool,
-    locked_type: Option<&str>,
 ) -> CliResult {
     git::ensure_repo()?;
     if !git::is_clean()? {
@@ -142,17 +100,14 @@ fn start(
     }
 
     // Resolve branch type.
-    let branch_type = match locked_type {
-        Some(t) => t.to_string(),
-        None => match branch_type {
-            Some(t) => t,
-            None => prompt_line(
-                &ctx.out,
-                &ctx.global,
-                &format!("Branch type [{}]", BRANCH_TYPES.join("/")),
-                None,
-            )?,
-        },
+    let branch_type = match branch_type {
+        Some(t) => t,
+        None => prompt_line(
+            &ctx.out,
+            &ctx.global,
+            &format!("Branch type [{}]", BRANCH_TYPES.join("/")),
+            None,
+        )?,
     };
     if !valid_branch_type(&branch_type) {
         return Err(CliError::usage(format!(
@@ -225,17 +180,6 @@ fn start(
     ));
     git::checkout_new_from(&git_branch, &format!("origin/{}", cfg.parent))?;
 
-    let state = ActiveState {
-        pscale_branch: pscale_branch.clone(),
-        git_branch: git_branch.clone(),
-        port: cfg.port,
-        db: cfg.db.clone(),
-        org: cfg.org.clone(),
-        parent: cfg.parent.clone(),
-        created_at: now_rfc3339(),
-        data_isolated: isolated,
-    };
-    crate::flow::state::write_state(cfg, &state)?;
     env::write_api_env_local(cfg)?;
 
     ctx.out.success(format!("on branch {git_branch}"));
@@ -437,138 +381,79 @@ fn validate_version(v: &str) -> Result<(), CliError> {
     }
 }
 
-fn db(ctx: &Ctx, cfg: &FlowConfig, cmd: DbCmd) -> CliResult {
-    use crate::flow::state::read_state;
-    match cmd {
-        DbCmd::Connect => {
-            pscale::ensure_auth()?;
-            let state = read_state(cfg)?;
-            let (branch, port) = match &state {
-                Some(s) => (
-                    s.pscale_branch.clone(),
-                    if s.port != 0 { s.port } else { cfg.port },
-                ),
-                None => (pscale_branch_from_git_or_parent(cfg, None), cfg.port),
-            };
-            ctx.out.info(format!(
-                "opening tunnel: {}/{branch} → 127.0.0.1:{port}",
-                cfg.db
-            ));
-            pscale::connect(cfg, &branch, port)?;
-            Ok(())
-        }
-        DbCmd::Status => {
-            let state = read_state(cfg)?;
-            match state {
-                None => {
-                    ctx.out.info(format!(
-                        "no active feature branch — running on parent ({})",
-                        cfg.parent
-                    ));
-                    ctx.out
-                        .data(&json!({ "active": false, "parent": cfg.parent }), |_| {
-                            format!("on parent ({})", cfg.parent)
-                        });
-                }
-                Some(s) => {
-                    ctx.out.data(&s, |_| {
-                        format!(
-                            "{} → {} (isolated: {})",
-                            s.git_branch, s.pscale_branch, s.data_isolated
-                        )
-                    });
-                }
-            }
-            Ok(())
-        }
-        DbCmd::End { force } => db_end(ctx, cfg, force),
-        DbCmd::CurrentBranch => {
-            let state = read_state(cfg)?;
-            let branch = match state {
-                Some(s) => s.pscale_branch,
-                None => pscale_branch_from_git_or_parent(cfg, None),
-            };
-            ctx.out
-                .data(&json!({ "branch": branch }), |_| branch.clone());
-            Ok(())
-        }
+/// Print the active flow state, derived from the current git branch. On a feature branch
+/// (`<type>/<slug>`) the paired pscale branch is `pscale_branch_from_git`; whether it physically
+/// exists (best-effort live check) is reported as `dataIsolated`. Otherwise we're on the parent.
+fn status(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
+    git::ensure_repo()?;
+    let git_branch = git::current_branch()?;
+    if !is_feature_branch(&git_branch) {
+        ctx.out.info(format!(
+            "no active feature branch — running on parent ({})",
+            cfg.parent
+        ));
+        ctx.out
+            .data(&json!({ "active": false, "parent": cfg.parent }), |_| {
+                format!("on parent ({})", cfg.parent)
+            });
+        return Ok(());
     }
+    let pscale_branch = pscale_branch_from_git(&git_branch);
+    let isolated = pscale::ensure_auth().is_ok() && pscale::branch_exists(cfg, &pscale_branch);
+    ctx.out.data(
+        &json!({
+            "active": true,
+            "gitBranch": git_branch,
+            "pscaleBranch": pscale_branch,
+            "dataIsolated": isolated,
+            "parent": cfg.parent,
+        }),
+        |_| format!("{git_branch} → {pscale_branch} (isolated: {isolated})"),
+    );
+    Ok(())
 }
 
-fn db_end(ctx: &Ctx, cfg: &FlowConfig, force: bool) -> CliResult {
-    use crate::flow::state::{clear_state, read_state};
-    let state = match read_state(cfg)? {
-        None => {
-            ctx.out.info("no active feature branch");
-            return Ok(());
+/// Switch back to the parent branch and strip the managed `.env.local` block. With `--force`, also
+/// delete the paired pscale branch derived from the current git branch (if it exists). The branch
+/// name is derived from git, and `pscale::delete_branch` refuses `main`/`dev`/parent, so a stray
+/// `--force` on a non-feature branch can't delete a shared branch.
+fn end(ctx: &Ctx, cfg: &FlowConfig, force: bool) -> CliResult {
+    git::ensure_repo()?;
+    let git_branch = git::current_branch()?;
+    if !is_feature_branch(&git_branch) {
+        ctx.out.info("no active feature branch");
+        return Ok(());
+    }
+    let pscale_branch = pscale_branch_from_git(&git_branch);
+
+    ctx.out.step(format!("git checkout {}", cfg.parent));
+    git::checkout(&cfg.parent)?;
+
+    if force {
+        pscale::ensure_auth()?;
+        if pscale::branch_exists(cfg, &pscale_branch) {
+            ctx.out
+                .step(format!("pscale branch delete {} {}", cfg.db, pscale_branch));
+            pscale::delete_branch(cfg, &pscale_branch)?;
+        } else {
+            ctx.out
+                .info(format!("no paired pscale branch {pscale_branch} to delete"));
         }
-        Some(s) => s,
-    };
-    let parent = if state.parent.is_empty() {
-        cfg.parent.clone()
-    } else {
-        state.parent.clone()
-    };
-
-    ctx.out.step(format!("git checkout {parent}"));
-    git::checkout(&parent)?;
-
-    if force && !state.data_isolated {
-        return Err(CliError::expected(format!(
-            "refusing --force: this flow is git-only (no paired pscale branch). target is the shared parent {:?}",
-            state.pscale_branch
-        )));
-    } else if force {
-        ctx.out.step(format!(
-            "pscale branch delete {} {}",
-            cfg.db, state.pscale_branch
-        ));
-        pscale::delete_branch(cfg, &state.pscale_branch)?;
-    } else if state.data_isolated {
+    } else if pscale::ensure_auth().is_ok() && pscale::branch_exists(cfg, &pscale_branch) {
         ctx.out.info(format!(
-            "leaving pscale branch {} alive — pass --force to delete",
-            state.pscale_branch
+            "leaving pscale branch {pscale_branch} alive — pass --force to delete"
         ));
     }
 
     env::clear_api_env_local(cfg)?;
-    clear_state(cfg)?;
     ctx.out.success("done");
     Ok(())
 }
 
-fn pscale_branch_from_git_or_parent(cfg: &FlowConfig, _state: Option<()>) -> String {
-    if let Ok(branch) = git::current_branch() {
-        for t in BRANCH_TYPES {
-            let prefix = format!("{t}/");
-            if branch.starts_with(&prefix) && branch.len() > prefix.len() {
-                return pscale_branch_from_git(&branch);
-            }
-        }
-    }
-    cfg.parent.clone()
-}
-
-/// Minimal RFC3339 UTC timestamp from the system clock, no chrono dependency.
-fn now_rfc3339() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // civil-from-days (Howard Hinnant's algorithm)
-    let days = (secs / 86_400) as i64;
-    let rem = secs % 86_400;
-    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+/// True when `branch` is a `<type>/<slug>` feature branch (non-empty slug after a known type prefix).
+fn is_feature_branch(branch: &str) -> bool {
+    BRANCH_TYPES.iter().any(|t| {
+        let prefix = format!("{t}/");
+        branch.starts_with(&prefix) && branch.len() > prefix.len()
+    })
 }

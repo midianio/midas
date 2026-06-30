@@ -3,7 +3,7 @@
 // and read/mutate its `$state` fields directly; cross-singleton talk is a direct method call, never
 // a global DOM event (FE-0008).
 //
-// `midas add state <name>` scaffolds another one of these.
+// `midas touch state <name>` scaffolds another one of these.
 
 import { generateId } from "$lib/utils";
 

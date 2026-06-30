@@ -1,5 +1,5 @@
 //! Managed `.env.local` block injection. Replaces a marker-delimited region without touching
-//! anything the user wrote outside it. Markers default to midflow's (`# >>> midflow >>>`).
+//! anything the user wrote outside it. Markers default to `# >>> midas >>>` (set `[flow] env_marker`).
 
 use super::config::FlowConfig;
 use super::git;

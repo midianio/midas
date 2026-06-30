@@ -1,4 +1,5 @@
-//! `midas new` — scaffold a whole conformant project: `midas.toml` (version pinned to this binary),
+//! `midas touch project` (alias `midas new`) — scaffold a whole conformant project: `midas.toml`
+//! (version pinned to this binary),
 //! agent docs with the synced managed block, a starter CI, and the standard dir shape. Code profiles
 //! also lay down a runnable, conformant skeleton (the `rust-service` template for `service`) that
 //! compiles and passes `midas check` out of the box.
@@ -128,7 +129,7 @@ pub fn run(
         _ => {}
     }
     ctx.out
-        .hint("scaffold pieces with `midas add …`; start the flow with `midas flow start`");
+        .hint("scaffold pieces with `midas touch …`; start the flow with `midas flow start`");
     ctx.out.data(
         &json!({ "created": created, "profile": profile.as_str(), "version": version }),
         |_| name.clone(),
@@ -191,7 +192,7 @@ fn readme(name: &str, profile: Profile) -> String {
         "# {name}\n\n\
 A midian project ({} profile). It follows the **midian engineering standard** (`midas`).\n\n\
 - `midas check` — the conformance gate (must be clean, or ledgered in `midas.toml`).\n\
-- `midas add …` — scaffold conventional pieces.\n\
+- `midas touch …` — scaffold a conformant project or piece.\n\
 - `midas flow …` — the release/branch flow.\n\n\
 Conventions live in the `midas` repo under `standards/`; this repo pins its version in `midas.toml`.\n",
         profile.as_str()

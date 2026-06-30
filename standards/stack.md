@@ -21,7 +21,7 @@ a stated swap condition — the escape hatch. Deviation is `ledgered` (record it
 | **Telemetry** | PostHog (product analytics, error tracking, LLM obs, flags) behind vendor-neutral ports + OTLP for pillars | One vendor/one bill, but swap-safe by construction (adapter swap, not a refactor). | Per-capability swap (e.g. Sentry for errors) = a new adapter, not a stack change. |
 | **LLM / data pipeline** | Dagster | Generation/heavy data work belongs in the pipeline; the API only *serves* generated data. | `hard` boundary — LLM generation does not belong in the request path of the serving backend. |
 | **Deploy** | Railway (containers) | Simple container deploys; instant rollback by re-pointing. | Scale/compliance need a different host — the Dockerfile is portable. |
-| **CI / repo** | GitHub + the midflow release flow | — | — |
+| **CI / repo** | GitHub + the midas release flow | — | — |
 
 ## Cross-cutting rules
 

@@ -169,7 +169,7 @@ This project follows the midian engineering standard. Conventions are IDed (`BE-
 and live in the `midas` repo under `standards/`. Before opening a PR:\n\
 \n\
 - **Gate:** `midas check` must be clean — or each failure ledgered in `midas.toml [deviations]`.\n\
-- **Scaffold** conventional pieces with `midas add` / `midas new`, never hand-rolled.\n\
+- **Scaffold** a conformant project or piece with `midas touch`, never hand-rolled.\n\
 - **Use the seams** the conventions name; don't reach around them.\n\
 - On conflict between a stale local doc and the pinned standard, the standard wins.\n\
 \n\

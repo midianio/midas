@@ -1,6 +1,6 @@
 //! Router assembly + the shared `AppState`. Documented routes come from the OpenAPI seam (so the
 //! contract can't drift); liveness and the spec endpoint are added here. Grow the service with
-//! `midas add module <name>`, then register its handler in `openapi::router`.
+//! `midas touch module <name>`, then register its handler in `openapi::router`.
 
 use axum::http::header;
 use axum::response::IntoResponse;

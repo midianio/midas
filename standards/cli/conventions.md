@@ -70,7 +70,7 @@ the same structural-correctness move as the backend's `response.rs`/`AppError`.
 
 ## Command structure (`CLI-0010` `[review]`)
 
-- **Noun-first grouping** for multi-domain tools: `midas flow pr`, `midas add module`, `midas check`.
+- **Noun-first grouping** for multi-domain tools: `midas flow pr`, `midas touch module`, `midas check`.
   Subcommands are kebab-case; the noun is the area, the verb is the action.
 - `--help` is complete and accurate on every (sub)command — clap derive gives this for free; keep doc
   comments on every arg.

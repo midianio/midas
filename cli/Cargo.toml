@@ -23,6 +23,9 @@ globset = { workspace = true }
 regex = { workspace = true }
 ctrlc = { workspace = true }
 libc = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }

@@ -20,7 +20,7 @@ midas/
 │       ├── registry.rs       # embedded conventions.json model
 │       ├── core/             # the CLI contract kernel — built
 │       │   └── {global,output,exit,confirm,prompt,config,style,log}.rs + mod.rs
-│       ├── flow/             # ported midflow (git, gh, pscale, state, env, config)
+│       ├── flow/             # ported midflow → midas flow (git, gh, pscale, env, config)
 │       ├── checks/           # mechanical check kinds (banned-call, file-structure; rest deferred)
 │       └── cmd/{flow,check,sync,doctor,add,new}.rs   # shipped · upgrade/gen deferred
 └── registry/                 # conventions.json (embedded at build); codemods later
@@ -38,14 +38,15 @@ agent-runnable contract is enforced once, centrally, not re-implemented per comm
 
 | Command | Key flags | stdout (`--json`) | Exit | Status |
 | --- | --- | --- | --- | --- |
-| `midas flow <…>` | (ported midflow) | per-subcommand | 0 / 1 / 2 | **shipped** |
+| `midas flow <verb>` | start·sync·pr·tag·end·status | per-subcommand | 0 / 1 / 2 | **shipped** |
 | `midas check` | (globals only) | `{version, root, mechanical:{…}, semantic:{delegated,…}}` | 0 / 2 / 3 | **shipped** (mechanical) |
 | `midas sync` | `--check` | files touched + block version | 0 / 2 | **shipped** |
 | `midas doctor` | — | env diagnosis | 0 / 2 | **shipped** |
-| `midas add state\|migration\|component\|module <name>` | `--dir`, `--ui`, `--no-wire`, `--force` | stamped file paths (+ `pub mod` wiring for `module`) | 0 / 2 / 3 | **shipped** |
-| `midas add handler\|pane …` | kind-specific | stamped file paths | 0 / 3 | next |
-| `midas new <name>` | `--profile`, `--dir`, `--force` | created project file list | 0 / 2 / 3 | **shipped** (incl. `rust-service` + `svelte-app` skeletons) |
-| `midas dev [names…]` | (globals only) | streamed prefixed process output | 0 / 1 / 3 | **shipped** (concurrent runner + pscale tunnel; `[dev]` in midas.toml) |
+| `midas touch state\|migration\|component\|module <name>` | `--dir`, `--ui`, `--no-wire`, `--force` | stamped file paths (+ `pub mod` wiring for `module`) | 0 / 2 / 3 | **shipped** |
+| `midas touch handler\|pane …` | kind-specific | stamped file paths | 0 / 3 | next |
+| `midas touch project <name>` | `--profile`, `--dir`, `--force` | created project file list | 0 / 2 / 3 | **shipped** (incl. `rust-service` + `svelte-app` skeletons) |
+| `midas dev [names…]` | (globals only) | streamed prefixed process output | 0 / 1 / 3 | **shipped** (concurrent runner + pscale tunnel; auto-migrate; `[dev]` in midas.toml) |
+| `midas migrate [apply\|status]` | (globals only) | `{newly_applied, states[]}` | 0 / 1 / 2 / 3 | **shipped** (forward-only runner over the local tunnel; `_migrations` checksum ledger; OPS-0008/0009) |
 | `midas setup` / `teardown` | `--no-db` / `--yes` | bootstrapped / torn down | 0 / 1 | later |
 | `midas gen types` | `--out` | written path | 0 / 1 | deferred |
 | `midas upgrade` | `--to <ver>`, `--dry-run` | applied codemods + residuals | 0 / 1 | deferred |
@@ -79,7 +80,7 @@ pscale_db     = "application"
 pscale_parent = "dev"
 pscale_region = "us-east"
 tunnel_port   = 3309
-# api_env_local / state_file / env_marker — the paths midflow used; overridable per repo
+# api_env_local / env_marker — overridable per repo (env_marker defaults to "midas")
 
 [deviations]               # ledgered escape hatches: convention id → reason
 "FE-0004" = "web-only — no Capacitor adapter switch"
@@ -171,15 +172,15 @@ runs `codemods/<from>-<to>/`.
 1. **`core` kernel** (`cli/src/core/`) — global flags, `Output`, exit-code mapping, `confirm`, config
    loader, tty, tracing. (Locks `standards/cli` `CLI-0001…0005` by construction.) ✅ built.
 2. **`midas flow`** — port `scripts/midflow` (Go) faithfully into Rust subcommands; lift its hardcoded
-   config into `[flow]`. (Defines the CLI standard in practice.) ✅ built (start·sync·pr·hotfix·tag·db·doctor).
+   config into `[flow]`. (Defines the CLI standard in practice.) ✅ built (start·sync·pr·tag·end·status).
 3. **embed** `registry/conventions.json` + version via `build.rs`. ✅ built.
 4. **`midas check` (mechanical)** — banned-call + file-structure implemented (artifact-hash /
    provenance-drift / clippy carried but `skipped`); the `[deviations]` ledger + escape policy + exit
    `0/2/3`. ✅ built (clean on midian; catches planted violations on a fixture; refuses a ledgered
    deviation for a `hard` rule).
 5. **`midas sync`** (managed-block writer) + **`midas doctor`**. ✅ built.
-6. **`midas add`** — deterministic scaffolding. ✅ built (`state`·`migration`·`component`·`module` — `module` writes the 4-file backend skeleton + wires `pub mod`); `handler`/`pane` ⬜ next.
-6b. **`midas new`** — whole-project scaffold (`midas.toml` + agent docs + CI + dir shape, profile-aware), embedding the runnable `rust-service` (`--profile service`) and `svelte-app` (`--profile app`) skeletons. ✅ built & verified.
+6. **`midas touch`** — deterministic scaffolding. ✅ built (`state`·`migration`·`component`·`module` — `module` writes the 4-file backend skeleton + wires `pub mod`); `handler`/`pane` ⬜ next.
+6b. **`midas touch project`** — whole-project scaffold (`midas.toml` + agent docs + CI + dir shape, profile-aware), embedding the runnable `rust-service` (`--profile service`) and `svelte-app` (`--profile app`) skeletons. ✅ built & verified.
 7. **`midas upgrade` + codemods.** ⏸ deferred (fleet-scale; build-trigger is "the agent-first software
    factory becomes real"). The stable convention IDs + the `midas.toml` version pin are the cheap
    anchors kept meanwhile.

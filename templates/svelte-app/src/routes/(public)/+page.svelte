@@ -4,7 +4,7 @@
 
 <main>
 	<h1>{{NAME}}</h1>
-	<p>A midian app, scaffolded by <code>midas new --profile app</code>.</p>
+	<p>A midian app, scaffolded by <code>midas touch project --profile app</code>.</p>
 	<p>Marketing / auth / legal pages live here under <code>(public)/</code> — SSR'd + prerendered.</p>
 	<p><a href="/app">Open the app →</a></p>
 </main>

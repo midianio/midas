@@ -40,14 +40,18 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 - ✅ `main.rs` clap root + dispatch + exit mapping
 - ✅ `manifest.rs` typed `midas.toml`
 - ✅ `registry.rs` embedded conventions.json model
-- ✅ `flow/` ported midflow (git, gh, pscale, state, env, config)
-- ✅ `cmd/flow.rs` start·sync·pr·hotfix·tag·db·doctor
+- ✅ `flow/` ported midflow → midas flow (git, gh, pscale, env, config)
+- ✅ `cmd/flow.rs` start·sync·pr·tag·end·status
 - ✅ `cmd/check.rs` mechanical engine (verified vs live midian: clean; vs fixture: catches 3, exit 2)
 - ✅ `checks/` banned-call · file-structure (artifact-hash/provenance/clippy = deferred → Skipped)
 - ✅ `cmd/sync.rs` managed-block writer
 - ✅ `cmd/doctor.rs` env diagnosis
 - ✅ `cmd/dev.rs` concurrent dev orchestrator (`[dev]` in midas.toml): prefixed streaming output,
-     optional pscale tunnel (reuses `[flow]` + paired branch), per-process-group Ctrl-C teardown
+     optional pscale tunnel (reuses `[flow]` + paired branch), per-process-group Ctrl-C teardown;
+     auto-applies pending migrations once the tunnel is up (`[dev].migrate`, default on)
+- ✅ `cmd/migrate.rs` + `flow/migrate.rs` migration runner (`midas migrate` / `migrate status`):
+     forward-only `db/migrations/NNN_*.sql` over sqlx, no-txn `raw_sql` apply (Vitess/OPS-0008),
+     `_migrations` checksum ledger (BE-0007 drift guard), local-tunnel-only guard (OPS-0009)
 - ✅ `cmd/add.rs` + `cmd/new.rs` scaffolding; `cmd/templates.rs` embedded skeletons
 - ⏸ `cmd/gen.rs` TS types from OpenAPI
 
@@ -62,7 +66,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
   0/2/3, doctor json, check clean/violation/ledgered, sync missing→present, add state/migration/module,
   new (incl. the rust-service skeleton + token substitution).
 
-### Scaffolding ✅ (`midas add`)
+### Scaffolding ✅ (`midas touch`)
 - ✅ `add state <name>` → `lib/state/<name>.svelte.ts` (FE-0001 singleton; Pascal/camel derived)
 - ✅ `add migration <slug>` → `db/migrations/NNN_<slug>.sql` (auto-numbered, OPS-0008)
 - ✅ `add component <name>` → `lib/components[/ui]/<Pascal>.svelte` (Svelte 5 `$props`, FE-0011; `--ui`)
@@ -76,14 +80,14 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 
 ### Templates ✅ (`rust-service` + `svelte-app`)
 - ✅ `templates/rust-service/` — **conformant, compiling** axum service, embedded via `include_str!`
-     and laid down under `app/api/` by `midas new --profile service`. Seams: `response` (BE-0002),
+     and laid down under `app/api/` by `midas touch project --profile service`. Seams: `response` (BE-0002),
      `error` (BE-0003 + `ErrorBody`), `ids` (BE-0016), `auth`/`RequireAuth` (BE-0004, Clerk-stub),
      `http` pooled client (BE-0010), `tasks` tracker (BE-0011), `openapi` (BE-0014, utoipa-axum
      `OpenApiRouter` → `/openapi.json`), `db` (Option<MySqlPool> + `AppState::db()`), and a sample
      `modules/items` feature module (BE-0001). Tokens `{{PKG}}`/`{{CRATE}}`. **Verified end-to-end:**
      `midas check` (3/0) + `cargo build` + `clippy -D warnings`, runs (`/ping`→`pong`; `/items/items`
      → 401 without auth, the envelope with auth; `/openapi.json` exposes path + `clerk_jwt` scheme),
-     **and `midas add module` output compiles into it** (sqlx `macros` feature, runtime-checked
+     **and `midas touch module` output compiles into it** (sqlx `macros` feature, runtime-checked
      queries — no DB needed; BE-0018 `query!` + `.sqlx` cache still TODO'd).
 - ✅ `templates/svelte-app/` — **conformant, building** SvelteKit app (Svelte 5 runes,
      adapter-static), laid down under `app/web/` for `--profile app` (which also lays the backend).

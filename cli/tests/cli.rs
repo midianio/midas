@@ -120,6 +120,21 @@ fn check_ledgered_deviation_is_not_a_failure() {
 }
 
 #[test]
+fn flow_help_is_flat() {
+    // The cleaned-up flow group: verbs are direct, not nested under `db`, and the redundant
+    // `hotfix`/`doctor` are gone.
+    midas()
+        .args(["flow", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("start"))
+        .stdout(predicate::str::contains("end"))
+        .stdout(predicate::str::contains("status"))
+        .stdout(predicate::str::contains("hotfix").not())
+        .stdout(predicate::str::contains("Operate on the active pscale").not());
+}
+
+#[test]
 fn flow_tag_bad_version_is_usage_error() {
     // Outside a git repo / not on trunk this errors before validation; assert it never hangs and
     // returns a typed non-success code (not 0). Run in a throwaway dir.
@@ -168,10 +183,17 @@ fn sync_missing_then_present() {
 }
 
 #[test]
-fn add_state_scaffolds_singleton() {
+fn touch_state_scaffolds_singleton() {
     let dir = tempfile::tempdir().unwrap();
     let out = midas()
-        .args(["--json", "add", "state", "notes-pane", "--dir", "lib/state"])
+        .args([
+            "--json",
+            "touch",
+            "state",
+            "notes-pane",
+            "--dir",
+            "lib/state",
+        ])
         .current_dir(dir.path())
         .output()
         .unwrap();
@@ -186,16 +208,16 @@ fn add_state_scaffolds_singleton() {
 }
 
 #[test]
-fn add_state_refuses_overwrite() {
+fn touch_state_refuses_overwrite() {
     let dir = tempfile::tempdir().unwrap();
     midas()
-        .args(["add", "state", "x", "--dir", "lib/state"])
+        .args(["touch", "state", "x", "--dir", "lib/state"])
         .current_dir(dir.path())
         .assert()
         .success();
     // second time without --force → expected-negative exit 2
     midas()
-        .args(["add", "state", "x", "--dir", "lib/state"])
+        .args(["touch", "state", "x", "--dir", "lib/state"])
         .current_dir(dir.path())
         .assert()
         .failure()
@@ -203,10 +225,17 @@ fn add_state_refuses_overwrite() {
 }
 
 #[test]
-fn add_component_pascal_filename() {
+fn touch_component_pascal_filename() {
     let dir = tempfile::tempdir().unwrap();
     let out = midas()
-        .args(["--json", "add", "component", "notes-toolbar", "--dir", "c"])
+        .args([
+            "--json",
+            "touch",
+            "component",
+            "notes-toolbar",
+            "--dir",
+            "c",
+        ])
         .current_dir(dir.path())
         .output()
         .unwrap();
@@ -219,12 +248,12 @@ fn add_component_pascal_filename() {
 }
 
 #[test]
-fn add_migration_numbers_sequentially() {
+fn touch_migration_numbers_sequentially() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("db/migrations")).unwrap();
     fs::write(dir.path().join("db/migrations/018_existing.sql"), "").unwrap();
     let out = midas()
-        .args(["--json", "add", "migration", "add-notes-index"])
+        .args(["--json", "touch", "migration", "add-notes-index"])
         .current_dir(dir.path())
         .output()
         .unwrap();
@@ -237,14 +266,14 @@ fn add_migration_numbers_sequentially() {
 }
 
 #[test]
-fn add_module_scaffolds_and_wires() {
+fn touch_module_scaffolds_and_wires() {
     let dir = tempfile::tempdir().unwrap();
     let modules = dir.path().join("m");
     fs::create_dir_all(&modules).unwrap();
     fs::write(modules.join("mod.rs"), "//! mods\npub mod notes;\n").unwrap();
 
     let out = midas()
-        .args(["--json", "add", "module", "billing", "--dir", "m"])
+        .args(["--json", "touch", "module", "billing", "--dir", "m"])
         .current_dir(dir.path())
         .output()
         .unwrap();
@@ -266,7 +295,7 @@ fn add_module_scaffolds_and_wires() {
 
     // idempotent: second run doesn't duplicate the decl (uses --force on the dir)
     let out2 = midas()
-        .args(["add", "module", "billing", "--dir", "m", "--force"])
+        .args(["touch", "module", "billing", "--dir", "m", "--force"])
         .current_dir(dir.path())
         .output()
         .unwrap();
@@ -277,6 +306,21 @@ fn add_module_scaffolds_and_wires() {
         1,
         "no duplicate decl"
     );
+}
+
+#[test]
+fn touch_project_scaffolds() {
+    // The canonical project path is `touch project`; `new` is a hidden back-compat alias.
+    let dir = tempfile::tempdir().unwrap();
+    let out = midas()
+        .args(["--json", "touch", "project", "acme", "--profile", "service"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["profile"], "service");
+    assert!(dir.path().join("acme/midas.toml").exists());
 }
 
 #[test]

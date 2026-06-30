@@ -3,6 +3,8 @@ pub mod check;
 pub mod dev;
 pub mod doctor;
 pub mod flow;
+pub mod migrate;
 pub mod new;
 pub mod sync;
 pub mod templates;
+pub mod touch;

@@ -13,8 +13,9 @@ pub fn seed_by_default(branch_type: &str) -> bool {
     matches!(branch_type, "feat" | "fix")
 }
 
-/// Resolved flow configuration. Defaults match midian's `midflow` (and are wire-compatible with the
-/// existing `.midflow/active.json` + `# >>> midflow >>>` env markers, so `midas flow` is a drop-in).
+/// Resolved flow configuration. Every field falls back to a midian default, so a fresh checkout runs
+/// `midas flow` with no `[flow]` block. Active state is derived from the current git branch (no state
+/// file), and the managed `.env.local` block is marked `# >>> midas >>>`.
 #[derive(Debug, Clone)]
 pub struct FlowConfig {
     pub trunk: String,
@@ -24,7 +25,6 @@ pub struct FlowConfig {
     pub region: String,
     pub port: u16,
     pub api_env_local: String,
-    pub state_file: String,
     pub env_marker: String,
 }
 
@@ -38,8 +38,7 @@ impl Default for FlowConfig {
             region: "us-east".into(),
             port: 3309,
             api_env_local: "app/api/.env.local".into(),
-            state_file: ".midflow/active.json".into(),
-            env_marker: "midflow".into(),
+            env_marker: "midas".into(),
         }
     }
 }
@@ -56,7 +55,6 @@ impl FlowConfig {
             region: f.pscale_region.clone().unwrap_or(d.region),
             port: f.tunnel_port.unwrap_or(d.port),
             api_env_local: f.api_env_local.clone().unwrap_or(d.api_env_local),
-            state_file: f.state_file.clone().unwrap_or(d.state_file),
             env_marker: f.env_marker.clone().unwrap_or(d.env_marker),
         }
     }
@@ -68,6 +66,56 @@ impl FlowConfig {
             self.port, self.db
         )
     }
+
+    /// The sqlx connection URL the migrate runner should use. Prefers the documented source of
+    /// truth — `MYSQL_DATABASE_URL` (the go-sql-driver DSN form, normalized) — and falls back to the
+    /// `[flow]` tunnel (`mysql://root@127.0.0.1:PORT/DB`). The runner refuses anything that isn't a
+    /// local tunnel (OPS-0009: schema reaches prod only via a reviewed PlanetScale deploy request).
+    pub fn migrate_url(&self) -> String {
+        match std::env::var("MYSQL_DATABASE_URL") {
+            Ok(dsn) if !dsn.trim().is_empty() => normalize_mysql_dsn(&dsn),
+            _ => format!("mysql://root@127.0.0.1:{}/{}", self.port, self.db),
+        }
+    }
+}
+
+/// Convert a go-sql-driver DSN (`user[:pass]@tcp(host:port)/db?params`, as written into
+/// `.env.local` by `local_db_url`) into the `mysql://user[:pass]@host:port/db` URL sqlx expects.
+/// Query params are dropped — sqlx takes its own (TLS handled by the tunnel; DDL needs no tuning).
+/// A string that is already a `mysql://` URL is returned unchanged.
+pub fn normalize_mysql_dsn(dsn: &str) -> String {
+    let dsn = dsn.trim();
+    if dsn.starts_with("mysql://") {
+        return dsn.split('?').next().unwrap_or(dsn).to_string();
+    }
+    // Split optional `user[:pass]@` credentials from the `tcp(host:port)/db?…` remainder.
+    let (creds, rest) = match dsn.rsplit_once('@') {
+        Some((c, r)) => (Some(c), r),
+        None => (None, dsn),
+    };
+    // `tcp(host:port)/db?params` → `host:port` + `/db`.
+    let rest = rest.strip_prefix("tcp(").unwrap_or(rest);
+    let (host_port, tail) = rest.split_once(')').unwrap_or((rest, ""));
+    let path = tail.split('?').next().unwrap_or(tail); // keep leading `/db`
+    match creds {
+        Some(c) => format!("mysql://{c}@{host_port}{path}"),
+        None => format!("mysql://{host_port}{path}"),
+    }
+}
+
+/// Whether a sqlx mysql URL points at the local loopback tunnel. The migrate runner is
+/// dev/preview-only by construction (OPS-0004/OPS-0009); a remote host is refused.
+pub fn is_local_mysql_url(url: &str) -> bool {
+    let after = url.strip_prefix("mysql://").unwrap_or(url);
+    let hostport = after.rsplit_once('@').map(|(_, h)| h).unwrap_or(after);
+    let host = hostport
+        .split('/')
+        .next()
+        .unwrap_or(hostport)
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(hostport);
+    matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
 }
 
 /// `feat/notes-pane` → `feat-notes-pane` (so PR-merge automation can recover the pscale branch from
@@ -103,4 +151,36 @@ pub fn validate_slug(slug: &str) -> anyhow::Result<()> {
         anyhow::bail!("slug is empty after sanitizing — use letters, digits, dashes");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_go_dsn_to_sqlx_url() {
+        assert_eq!(
+            normalize_mysql_dsn("root@tcp(127.0.0.1:3309)/application?tls=false&loc=UTC"),
+            "mysql://root@127.0.0.1:3309/application"
+        );
+        assert_eq!(
+            normalize_mysql_dsn("u:p@tcp(localhost:3306)/db"),
+            "mysql://u:p@localhost:3306/db"
+        );
+    }
+
+    #[test]
+    fn normalize_passes_through_mysql_url_and_drops_params() {
+        assert_eq!(
+            normalize_mysql_dsn("mysql://root@127.0.0.1:3309/app?ssl-mode=DISABLED"),
+            "mysql://root@127.0.0.1:3309/app"
+        );
+    }
+
+    #[test]
+    fn local_guard_accepts_loopback_rejects_remote() {
+        assert!(is_local_mysql_url("mysql://root@127.0.0.1:3309/app?ssl-mode=DISABLED"));
+        assert!(is_local_mysql_url("mysql://root@localhost:3309/app"));
+        assert!(!is_local_mysql_url("mysql://user:pass@aws.connect.psdb.cloud:3306/app"));
+    }
 }
