@@ -37,7 +37,7 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
     let cfg = FlowConfig::from_manifest(&manifest);
     let mut tunnel_port: Option<u16> = None;
     if manifest.dev.tunnel {
-        let branch = tunnel_branch(&manifest, &cfg);
+        let branch = tunnel_branch(ctx, &manifest, &cfg);
         ctx.out.step(format!(
             "tunnel → {} branch {branch} on :{}",
             cfg.db, cfg.port
@@ -161,16 +161,25 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
     Ok(())
 }
 
-/// Resolve the tunnel branch: explicit override, else the paired branch for the current git branch,
-/// else the `[flow]` parent.
-fn tunnel_branch(m: &Manifest, cfg: &FlowConfig) -> String {
+/// Resolve the tunnel branch: explicit override, else the paired branch for the current git branch
+/// (when one actually exists on pscale), else the `[flow]` parent. Git-only branch types
+/// (`chore`/`docs`/`spike`) never get a paired pscale branch, so connecting to their derived name
+/// would fail with "branch … does not exist" — those fall back to the parent (`dev` by default).
+fn tunnel_branch(ctx: &Ctx, m: &Manifest, cfg: &FlowConfig) -> String {
     if let Some(b) = &m.dev.branch {
         return b.clone();
     }
     if let Ok(gb) = crate::proc::capture("git", &["branch", "--show-current"]) {
         let gb = gb.trim();
         if !gb.is_empty() && gb != cfg.trunk {
-            return pscale_branch_from_git(gb);
+            let paired = pscale_branch_from_git(gb);
+            if crate::flow::pscale::branch_exists(cfg, &paired) {
+                return paired;
+            }
+            ctx.out.warn(format!(
+                "pscale branch {paired:?} does not exist — falling back to {:?}",
+                cfg.parent
+            ));
         }
     }
     cfg.parent.clone()

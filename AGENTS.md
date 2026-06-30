@@ -14,3 +14,22 @@ and live in the `midas` repo under `standards/`. Before opening a PR:
 Review agents: run `midas check --json` and read `standards/` for the full set (review-tier
 conventions are semantic and not machine-checked).
 <!-- /midas -->
+
+## Releasing midas
+
+`midas` is consumed as a pinned binary by other midian projects, so every change ships as a tagged
+release. This is the standard method for **any** change in this repo:
+
+1. Land the change on `main` (work on a branch if you like, but merge to `main` locally — releases
+   cut from `main`).
+2. Make sure the gate is clean: `cargo fmt`, `cargo clippy`, and `midas check`.
+3. Bump the version in `cli/Cargo.toml` — patch (`0.1.1` → `0.1.2`) for fixes and internal changes,
+   minor (`0.2.0`) for new commands or breaking flags. Run a build so `Cargo.lock` updates.
+4. Commit, then `git push origin main`.
+5. Tag the release with the **bare** version (no `v` prefix), annotated, and push the tag:
+   ```
+   git tag -a 0.1.2 -m "midas 0.1.2 — <short title>"
+   git push origin 0.1.2
+   ```
+6. The tag fires the `dist` Release workflow (`.github/workflows/release.yml`), which builds the
+   cross-platform binaries and publishes a GitHub Release. Consumers update from the new tag/installer.
