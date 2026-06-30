@@ -133,6 +133,7 @@ CLI standard, [`standards/cli/`](./standards/cli/)).
 | --- | --- | --- |
 | `midas flow start·sync·pr·tag·end·status` | The release/branch flow (ported from midflow). | **shipped** |
 | `midas check` | Lint vs the pinned standard — **mechanical only**; review-tier conventions are delegated to an external agent ([§8](#8-enforcement)). The CI gate. | **shipped** |
+| `midas drift [<from>..<to>]` | **Read-only** drift briefing for a model: diff two embedded standard versions *as outcomes against this repo* (default pinned→embedded). Runs `check`'s classifier under each version and reports the transitions — `blocking` / `action_needed` / `ledger_cleanup` — with the `file:line` worklist, plus standing drift. Never gates (exit 0); the plan a future `midas upgrade` executes ([§7](#7-drift--versioning)). | **shipped** |
 | `midas sync` | Materialize the version-stamped managed block into the repo ([§8](#agent-playbook-delivery)). | **shipped** |
 | `midas doctor` | Diagnose the dev environment. | **shipped** |
 | `midas touch state\|migration\|component\|module` | Stamp a conventional piece — deterministic bytes (the `add-*` skills promoted to commands). `module` scaffolds the 4-file backend module + wires `pub mod` into `modules/mod.rs`. | **shipped** |
@@ -238,6 +239,10 @@ package versions. One knob.
 
 1. **Project-behind** — the standard moved ahead. "On 0.4.1; 0.5.0 adds OPS-0019" (a future `midas
    upgrade` carries it forward). Heads-up, never a hard fail (unless a new `hard` rule landed).
+   `midas drift` *explains* this direction for a model: it embeds frozen snapshots of past versions
+   (`registry/history/<ver>.json`, kept honest by a release-time freeze + a build test) and diffs the
+   pinned and embedded versions **as outcomes against this repo** — which new rules now block, which
+   `[deviations]` entries went dead — so the upgrade is a worklist, not a guess.
 2. **Project-ahead / divergent** — the project violates a `check`-tier rule of its *own pinned*
    version. The real failure: fix it, or *ledger it* in `[deviations]` with a reason.
 3. **Local invention** — a pattern the standard doesn't cover. `midas check --suggest` surfaces it as

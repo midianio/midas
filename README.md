@@ -39,6 +39,8 @@ code** (the midian Rust backend + Svelte frontend, and the `midflow` release CLI
 midas flow pr                   # release/branch flow: start·sync·pr·tag·end·status            — shipped
 midas check                     # mechanical lint vs the pinned standard; report drift     — shipped
                                 #   (review-tier conventions are delegated to your review agent)
+midas drift                     # read-only briefing: what changes for this repo if the standard moves — shipped
+                                #   (pinned→embedded outcome diff: blocking / action / ledger cleanup)
 midas sync                      # refresh the version-stamped agent managed-block in this repo — shipped
 midas touch module billing        # scaffold a conventional piece — state/migration/component/module — shipped
 midas touch project my-app --profile app  # scaffold a conformant project (midas.toml, agent docs, CI)   — shipped

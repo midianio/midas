@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-enum Outcome {
+pub enum Outcome {
     /// No violations.
     Pass,
     /// Blocking violation.
@@ -196,25 +196,32 @@ pub fn run(ctx: &Ctx, root_arg: Option<PathBuf>) -> CliResult {
     }
 }
 
-fn evaluate(
+/// The evaluated state of one convention against a tree: the classified [`Outcome`] plus the
+/// findings and an optional human note. Shared by `check` (which gates) and `drift` (which diffs
+/// two registry versions), so both classify a convention identically — no checker/differ skew.
+pub struct Eval {
+    pub outcome: Outcome,
+    pub findings: Vec<Finding>,
+    pub note: Option<String>,
+}
+
+/// Classify a single convention against the tree, mirroring `check`'s logic: applicability →
+/// mechanical spec → findings → escape/ledger classification. `drift` calls this once per registry
+/// version to compute the before/after outcomes for the same working tree + ledger.
+pub fn outcome_of(
     conv: &Convention,
     manifest: &Manifest,
     has_manifest: bool,
     scanner: &mut Scanner,
-) -> Result1 {
-    let base = |outcome: Outcome, findings: Vec<Finding>, note: Option<String>| Result1 {
-        id: conv.id.clone(),
-        title: conv.title.clone(),
-        tier: "check",
-        escape: escape_str(conv.escape),
+) -> Eval {
+    let eval = |outcome: Outcome, findings: Vec<Finding>, note: Option<String>| Eval {
         outcome,
         findings,
         note,
-        doc: conv.doc.clone(),
     };
 
     if !applicable(conv, manifest, has_manifest) {
-        return base(
+        return eval(
             Outcome::Skipped,
             vec![],
             Some("stack not applicable".into()),
@@ -224,7 +231,7 @@ fn evaluate(
     let spec = match &conv.check {
         Some(s) => s,
         None => {
-            return base(
+            return eval(
                 Outcome::Skipped,
                 vec![],
                 Some("no mechanical check defined".into()),
@@ -246,28 +253,28 @@ fn evaluate(
                 }
                 (f, n)
             }
-            Err(e) => return base(Outcome::Skipped, vec![], Some(format!("check error: {e}"))),
+            Err(e) => return eval(Outcome::Skipped, vec![], Some(format!("check error: {e}"))),
         },
         CheckSpec::FileStructure {
             must_exist,
             must_not_exist,
         } => (scanner.file_structure(must_exist, must_not_exist), None),
         CheckSpec::ArtifactHash { .. } => {
-            return base(
+            return eval(
                 Outcome::Skipped,
                 vec![],
                 Some("artifact-hash check deferred".into()),
             )
         }
         CheckSpec::ProvenanceDrift {} => {
-            return base(
+            return eval(
                 Outcome::Skipped,
                 vec![],
                 Some("provenance-drift check deferred".into()),
             )
         }
         CheckSpec::Clippy { .. } => {
-            return base(
+            return eval(
                 Outcome::Skipped,
                 vec![],
                 Some("clippy passthrough deferred (CI runs clippy directly)".into()),
@@ -276,31 +283,50 @@ fn evaluate(
     };
 
     if findings.is_empty() {
-        return base(Outcome::Pass, vec![], None);
+        return eval(Outcome::Pass, vec![], None);
     }
 
     // Violations present — classify by escape policy + deviation ledger.
     let deviated = manifest.deviations.contains_key(&conv.id);
     match conv.escape {
-        Escape::Advisory => base(Outcome::Advisory, findings, note.take()),
+        Escape::Advisory => eval(Outcome::Advisory, findings, note.take()),
         Escape::Ledgered if deviated => {
             let reason = manifest
                 .deviations
                 .get(&conv.id)
                 .cloned()
                 .unwrap_or_default();
-            base(
+            eval(
                 Outcome::Ledgered,
                 findings,
                 Some(format!("ledgered: {reason}")),
             )
         }
-        Escape::Hard if deviated => base(
+        Escape::Hard if deviated => eval(
             Outcome::Fail,
             findings,
             Some("deviation ignored — this rule is `hard` (no escape allowed)".into()),
         ),
-        _ => base(Outcome::Fail, findings, note.take()),
+        _ => eval(Outcome::Fail, findings, note.take()),
+    }
+}
+
+fn evaluate(
+    conv: &Convention,
+    manifest: &Manifest,
+    has_manifest: bool,
+    scanner: &mut Scanner,
+) -> Result1 {
+    let e = outcome_of(conv, manifest, has_manifest, scanner);
+    Result1 {
+        id: conv.id.clone(),
+        title: conv.title.clone(),
+        tier: "check",
+        escape: escape_str(conv.escape),
+        outcome: e.outcome,
+        findings: e.findings,
+        note: e.note,
+        doc: conv.doc.clone(),
     }
 }
 

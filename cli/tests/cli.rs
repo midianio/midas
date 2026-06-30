@@ -510,3 +510,108 @@ fn json_stdout_has_no_log_noise() {
     serde_json::from_slice::<serde_json::Value>(&out.stdout)
         .expect("stdout is pure JSON even with progress on stderr");
 }
+
+#[test]
+fn drift_same_version_is_clean_and_exits_zero() {
+    // No midas.toml → pinned falls back to the embedded version, so from == to: `drift` degrades to
+    // the (B) standing-drift pass on a clean tree, reports `same`, and never gates (exit 0).
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    let out = midas()
+        .args(["--json", "drift", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "drift is a report, never a gate");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["direction"], "same");
+    assert!(v["transitions"].as_array().unwrap().is_empty());
+    assert!(v.get("summary").is_some());
+}
+
+#[test]
+fn drift_unknown_version_is_usage_error() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    midas()
+        .args(["drift", "0.9.9", "--root"])
+        .arg(dir.path())
+        .assert()
+        .failure()
+        .code(3); // not embedded → usage error listing available versions
+}
+
+#[test]
+fn drift_outcome_diff_blocks_and_cleans_ledger() {
+    // The headline deep diff: a new `hard` convention the repo violates is `blocking`/fix_required
+    // with the file:line worklist, and a convention removed at the target that the repo still ledgers
+    // is `ledger_cleanup`/remove_dead_deviation. Both registries are supplied as files so the diff is
+    // independent of whatever the binary embeds.
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "src/main.rs",
+        "fn main() { println!(\"x\"); }\n",
+    );
+    write(
+        dir.path(),
+        "midas.toml",
+        "[standard]\nversion = \"0.1.0\"\n[deviations]\n\"X-0014\" = \"legacy\"\n",
+    );
+    // `from`: only the soon-to-be-removed X-0014. `to`: drops X-0014, adds the hard X-9001 println ban.
+    write(
+        dir.path(),
+        "from.json",
+        r#"{ "version": "0.1.0", "conventions": [
+            { "id": "X-0014", "title": "Legacy rule.", "layer": "cli", "tier": "check", "escape": "ledgered" }
+        ] }"#,
+    );
+    write(
+        dir.path(),
+        "to.json",
+        r#"{ "version": "0.2.0", "conventions": [
+            { "id": "X-9001", "title": "No bare println!.", "layer": "cli", "tier": "check", "escape": "hard",
+              "check": { "kind": "banned-call", "pattern": "\\bprintln!", "globs": ["**/*.rs"] },
+              "doc": "cli/conventions.md" }
+        ] }"#,
+    );
+
+    let out = midas()
+        .args(["--json", "drift", "--from-file"])
+        .arg(dir.path().join("from.json"))
+        .arg("--to-file")
+        .arg(dir.path().join("to.json"))
+        .arg("--root")
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "drift exits 0 even with blocking drift"
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["direction"], "upgrade");
+
+    let ts = v["transitions"].as_array().unwrap();
+    let added = ts
+        .iter()
+        .find(|t| t["id"] == "X-9001")
+        .expect("X-9001 present");
+    assert_eq!(added["class"], "blocking");
+    assert_eq!(added["action"], "fix_required");
+    assert_eq!(added["new_outcome"], "fail");
+    assert!(
+        !added["findings"].as_array().unwrap().is_empty(),
+        "blocking transition carries the file:line worklist"
+    );
+
+    let removed = ts
+        .iter()
+        .find(|t| t["id"] == "X-0014")
+        .expect("X-0014 present");
+    assert_eq!(removed["class"], "ledger_cleanup");
+    assert_eq!(removed["action"], "remove_dead_deviation");
+
+    assert_eq!(v["summary"]["blocking"], 1);
+    assert_eq!(v["summary"]["ledger_cleanup"], 1);
+}

@@ -4,9 +4,16 @@
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::path::Path;
 
-/// `registry/conventions.json`, embedded at build time.
+/// `registry/conventions.json`, embedded at build time — the *live* standard this binary speaks.
 const EMBEDDED: &str = include_str!("../../registry/conventions.json");
+
+/// Frozen snapshots of every *released* standard version, embedded so `midas drift` can diff any two
+/// versions fully offline (same self-contained principle as the live registry — no repo fetch, no
+/// skew). The release flow appends a `registry/history/<version>.json` when the standard bumps; the
+/// `history_snapshot_matches_live` test below keeps the snapshot for the current version honest.
+const HISTORY: &[(&str, &str)] = &[("0.1.0", include_str!("../../registry/history/0.1.0.json"))];
 
 #[derive(Debug, Deserialize)]
 pub struct Registry {
@@ -93,8 +100,112 @@ pub enum CheckSpec {
 }
 
 impl Registry {
-    /// Parse the embedded registry.
+    /// Parse the embedded (live) registry.
     pub fn embedded() -> Result<Registry> {
         serde_json::from_str(EMBEDDED).context("parse embedded registry/conventions.json")
+    }
+
+    /// Look up a convention by id.
+    pub fn by_id(&self, id: &str) -> Option<&Convention> {
+        self.conventions.iter().find(|c| c.id == id)
+    }
+
+    /// Every standard version this binary can resolve: the live one plus all frozen snapshots,
+    /// sorted ascending by semver. This is the set `drift` accepts and the list it prints when a
+    /// caller asks for an unknown version.
+    pub fn available_versions() -> Vec<String> {
+        let mut versions: Vec<String> = HISTORY.iter().map(|(v, _)| v.to_string()).collect();
+        if let Ok(live) = Registry::embedded() {
+            if !versions.contains(&live.version) {
+                versions.push(live.version);
+            }
+        }
+        versions.sort_by_key(|v| semver_key(v));
+        versions.dedup();
+        versions
+    }
+
+    /// Resolve a specific standard version to its registry: the live registry if it matches, else a
+    /// frozen snapshot. `Ok(None)` when the version isn't embedded (the caller turns that into a
+    /// usage error listing [`available_versions`]).
+    pub fn at_version(version: &str) -> Result<Option<Registry>> {
+        let live = Registry::embedded()?;
+        if live.version == version {
+            return Ok(Some(live));
+        }
+        for (ver, json) in HISTORY {
+            if *ver == version {
+                let r: Registry = serde_json::from_str(json)
+                    .with_context(|| format!("parse embedded history registry {ver}"))?;
+                return Ok(Some(r));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Load a registry from a local `conventions.json` — the `--from-file/--to-file` escape hatch
+    /// for unreleased or work-in-progress registries that aren't embedded.
+    pub fn from_file(path: &Path) -> Result<Registry> {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read registry {}", path.display()))?;
+        serde_json::from_str(&raw).with_context(|| format!("parse registry {}", path.display()))
+    }
+}
+
+/// A sortable/comparable key for a `MAJOR.MINOR.PATCH` version. Non-numeric or short versions sort
+/// before well-formed ones; this is an ordering aid, not a strict semver parser.
+pub fn semver_key(v: &str) -> (u64, u64, u64) {
+    let mut it = v.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
+    (
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Honesty guard for the embedded history: the snapshot for the *live* version must describe the
+    /// same standard as the live registry (same version + same conventions). If the live registry
+    /// evolves without its snapshot being re-frozen at release, `drift` would silently lie about the
+    /// current version — this fails the build first.
+    #[test]
+    fn history_snapshot_matches_live() {
+        let live = Registry::embedded().expect("live registry parses");
+        let snapshot = Registry::at_version(&live.version)
+            .expect("resolve live version")
+            .expect("a frozen snapshot exists for the live standard version");
+        assert_eq!(snapshot.version, live.version);
+
+        let key = |r: &Registry| {
+            let mut rows: Vec<(String, String, String, Option<String>)> = r
+                .conventions
+                .iter()
+                .map(|c| {
+                    (
+                        c.id.clone(),
+                        format!("{:?}", c.tier),
+                        format!("{:?}", c.escape),
+                        c.doc.clone(),
+                    )
+                })
+                .collect();
+            rows.sort();
+            rows
+        };
+        assert_eq!(
+            key(&snapshot),
+            key(&live),
+            "history/{}.json has drifted from the live registry — re-freeze it",
+            live.version
+        );
+    }
+
+    #[test]
+    fn available_versions_includes_live() {
+        let live = Registry::embedded().unwrap();
+        assert!(Registry::available_versions().contains(&live.version));
     }
 }

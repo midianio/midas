@@ -62,6 +62,20 @@ enum Commands {
         #[arg(long, value_parser = cmd::check::parse_root)]
         root: Option<PathBuf>,
     },
+    /// Explain standard drift: what changes for this repo if the pinned standard moves (read-only).
+    Drift {
+        /// Version to diff: `<to>` or `<from>..<to>`. Default: the pinned version → the embedded one.
+        spec: Option<String>,
+        /// Diff against a local conventions.json as the `from` side (unreleased/WIP registry).
+        #[arg(long, value_name = "PATH")]
+        from_file: Option<PathBuf>,
+        /// Diff against a local conventions.json as the `to` side (unreleased/WIP registry).
+        #[arg(long, value_name = "PATH")]
+        to_file: Option<PathBuf>,
+        /// Project root to inspect (defaults to the git toplevel).
+        #[arg(long, value_parser = cmd::check::parse_root)]
+        root: Option<PathBuf>,
+    },
     /// Write/update the version-stamped midas managed block in agent docs.
     Sync {
         /// Report drift without writing (exit 2 if a block is missing/stale).
@@ -102,6 +116,12 @@ fn main() {
             force,
         } => cmd::new::run(&ctx, name, profile, dir, force),
         Commands::Check { root } => cmd::check::run(&ctx, root),
+        Commands::Drift {
+            spec,
+            from_file,
+            to_file,
+            root,
+        } => cmd::drift::run(&ctx, spec, from_file, to_file, root),
         Commands::Sync { check } => cmd::sync::run(&ctx, check),
         Commands::Doctor => cmd::doctor::run(&ctx, true),
         Commands::Dev { only } => cmd::dev::run(&ctx, only),
