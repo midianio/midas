@@ -1,6 +1,10 @@
-//! `midas flow` — the release/branch lifecycle: start · sync · pr · tag · end · status. Active state
-//! is derived from the current git branch (the paired pscale branch is `pscale_branch_from_git`), so
-//! there is no state file to keep in sync.
+//! `midas flow` — the release/branch lifecycle: start · sync · ship · tag · end · status. Active
+//! state is derived from the current git branch (the paired pscale branch is `pscale_branch_from_git`),
+//! so there is no state file to keep in sync.
+//!
+//! The daily loop is `start → ship → end`: `start` cuts the branch, `ship` is the opinionated "send
+//! it" (rebase on trunk, push, open-or-update the PR in one shot), and `end` cleans up. `sync` is the
+//! lower-level rebase-only catch-up for mid-work; `ship` already does it as its first step.
 
 use crate::core::exit::{CliError, CliResult};
 use crate::core::{prompt_line, Ctx};
@@ -28,10 +32,11 @@ pub enum FlowCmd {
         #[arg(long)]
         no_data: bool,
     },
-    /// Rebase the current branch on origin/<trunk> and push.
+    /// Rebase the current branch on origin/<trunk> and push (mid-work catch-up).
     Sync,
-    /// Open a PR with the team template.
-    Pr {
+    /// Send it: rebase on trunk, push, then open or update the PR (the daily "I'm ready" button).
+    #[command(visible_alias = "pr")]
+    Ship {
         #[arg(long, short = 'd')]
         draft: bool,
         /// PR title (defaults to the last commit subject)
@@ -70,7 +75,7 @@ pub fn run(ctx: &Ctx, manifest: &Manifest, cmd: FlowCmd) -> CliResult {
             no_data,
         } => start(ctx, &cfg, branch_type, slug, with_data, no_data),
         FlowCmd::Sync => sync(ctx, &cfg),
-        FlowCmd::Pr { draft, title, body } => pr(ctx, &cfg, draft, title, body),
+        FlowCmd::Ship { draft, title, body } => ship(ctx, &cfg, draft, title, body),
         FlowCmd::Tag { version, message } => tag(ctx, &cfg, version, message),
         FlowCmd::End { force } => end(ctx, &cfg, force),
         FlowCmd::Status => status(ctx, &cfg),
@@ -226,20 +231,7 @@ fn sync(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
     ctx.out
         .info(format!("ahead {ahead}, behind {behind} — rebasing"));
     ctx.out.step(format!("git rebase origin/{}", cfg.trunk));
-    if git::rebase_onto(&cfg.trunk).is_err() {
-        let conflicts = git::conflicted_files();
-        let mut msg = String::from("rebase produced conflicts");
-        if !conflicts.is_empty() {
-            msg.push_str(":\n");
-            for c in &conflicts {
-                msg.push_str(&format!("    - {c}\n"));
-            }
-        }
-        msg.push_str(
-            "\nresolve them, then `git add` + `git rebase --continue`, or `git rebase --abort`.",
-        );
-        return Err(CliError::expected(msg));
-    }
+    rebase_onto_trunk(cfg)?;
 
     if !git::has_upstream() {
         ctx.out.info("branch has no upstream yet — pushing");
@@ -271,7 +263,30 @@ fn sync(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
     Ok(())
 }
 
-fn pr(
+/// Run `git rebase origin/<trunk>` and turn a conflict into a friendly, recoverable error listing
+/// the conflicted files. Shared by `sync` and `ship`.
+fn rebase_onto_trunk(cfg: &FlowConfig) -> CliResult {
+    if git::rebase_onto(&cfg.trunk).is_err() {
+        let conflicts = git::conflicted_files();
+        let mut msg = String::from("rebase produced conflicts");
+        if !conflicts.is_empty() {
+            msg.push_str(":\n");
+            for c in &conflicts {
+                msg.push_str(&format!("    - {c}\n"));
+            }
+        }
+        msg.push_str(
+            "\nresolve them, then `git add` + `git rebase --continue`, or `git rebase --abort`.",
+        );
+        return Err(CliError::expected(msg));
+    }
+    Ok(())
+}
+
+/// The opinionated daily "send it" button: rebase the feature branch on trunk, push it, then open a
+/// PR (or no-op if one is already open — the push has already updated it). Folds what used to be a
+/// separate `sync` + `pr` into one step; `sync` remains for a rebase-only catch-up.
+fn ship(
     ctx: &Ctx,
     cfg: &FlowConfig,
     draft: bool,
@@ -290,12 +305,41 @@ fn pr(
     }
     if !git::is_clean()? {
         return Err(CliError::expected(
-            "worktree is dirty — commit before opening a PR",
+            "worktree is dirty — commit before shipping",
         ));
     }
-    if !git::has_upstream() {
-        ctx.out.info("pushing branch — no upstream yet");
+
+    ctx.out.banner(format!("Shipping {branch}"));
+
+    // 1. Rebase on trunk (skip when already up to date).
+    ctx.out.step("git fetch origin --prune");
+    git::fetch()?;
+    let (ahead, behind) = git::ahead_behind(&cfg.trunk)?;
+    if behind > 0 {
+        ctx.out
+            .info(format!("behind {behind} — rebasing on origin/{}", cfg.trunk));
+        ctx.out.step(format!("git rebase origin/{}", cfg.trunk));
+        rebase_onto_trunk(cfg)?;
+    } else {
+        ctx.out
+            .info(format!("up to date with origin/{} (ahead {ahead})", cfg.trunk));
+    }
+
+    // 2. Push (force-with-lease after a possible rebase; plain push to set upstream the first time).
+    if git::has_upstream() {
+        ctx.out.step("git push --force-with-lease");
+        git::push_force_with_lease()?;
+    } else {
+        ctx.out.info("branch has no upstream yet — pushing");
         git::push()?;
+    }
+
+    // 3. Open the PR, or no-op if one is already open.
+    if let Some(url) = gh::existing_pr(&branch) {
+        ctx.out.success(format!("PR updated: {url}"));
+        ctx.out
+            .data(&json!({ "url": url, "created": false }), |_| url.clone());
+        return Ok(());
     }
 
     let default_title = git::last_commit_subject().unwrap_or_default();
@@ -315,8 +359,9 @@ fn pr(
     ));
     let url = gh::create_pr(&title, &body, &cfg.trunk, draft)?;
     ctx.out.success(format!("PR opened: {url}"));
-    ctx.out
-        .data(&json!({ "url": url, "draft": draft }), |_| url.clone());
+    ctx.out.data(&json!({ "url": url, "created": true, "draft": draft }), |_| {
+        url.clone()
+    });
     Ok(())
 }
 

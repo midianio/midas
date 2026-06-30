@@ -32,7 +32,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Release / branch flow: start · sync · pr · tag · end · status.
+    /// Release / branch flow: start · sync · ship · tag · end · status.
     Flow {
         #[command(subcommand)]
         cmd: FlowCmd,
