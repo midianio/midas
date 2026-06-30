@@ -9,6 +9,8 @@ exclude = ["templates"]
 edition = "2021"
 rust-version = "1.95"
 license = "UNLICENSED"
+repository = "https://github.com/midianio/midas"
+homepage = "https://github.com/midianio/midas"
 
 [workspace.dependencies]
 clap = { version = "4.5", features = ["derive"] }
@@ -25,6 +27,9 @@ globset = "0.4"
 regex = "1"
 ctrlc = "3"
 libc = "0.2"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading",
+] }
 sha2 = "0.10"
 tokio = { version = "1", features = ["rt", "net", "time"] }
 sqlx = { version = "0.8", default-features = false, features = [
@@ -41,3 +46,8 @@ tempfile = "3"
 strip = true
 lto = "thin"
 opt-level = "z"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

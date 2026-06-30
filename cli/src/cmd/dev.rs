@@ -8,6 +8,7 @@ use crate::core::exit::{CliError, CliResult};
 use crate::core::Ctx;
 use crate::flow::config::{pscale_branch_from_git, FlowConfig};
 use crate::manifest::{DevProcess, Manifest};
+use procgroup::Group;
 use std::io::{BufRead, BufReader, IsTerminal};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -79,15 +80,15 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
         ctrlc::set_handler(move || s.store(true, Ordering::SeqCst)).map_err(CliError::tool)?;
     }
 
+    let mut group = Group::new().map_err(CliError::tool)?;
     let mut children: Vec<(String, Child)> = Vec::new();
-    let mut group_pids: Vec<i32> = Vec::new();
     let mut readers: Vec<thread::JoinHandle<()>> = Vec::new();
 
     for (i, p) in procs.iter().enumerate() {
         let prefix = make_prefix(&p.name, width, COLORS[i % COLORS.len()], color);
         let mut child = spawn(p, &root)
             .map_err(|e| CliError::tool(anyhow::anyhow!("spawn {:?}: {e}", p.name)))?;
-        group_pids.push(child.id() as i32);
+        group.register(&child);
 
         if let Some(out) = child.stdout.take() {
             readers.push(pipe(out, prefix.clone(), true));
@@ -106,7 +107,7 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
                     if manifest.dev.migrate {
                         if let Err(e) = crate::cmd::migrate::apply_pending(ctx, &manifest, &root) {
                             ctx.out.error(format!("migrate: {e}"));
-                            teardown(&group_pids, &mut children);
+                            group.teardown(&mut children);
                             for r in readers {
                                 let _ = r.join();
                             }
@@ -153,7 +154,7 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
     if shutdown.load(Ordering::SeqCst) {
         ctx.out.step("shutting down");
     }
-    teardown(&group_pids, &mut children);
+    group.teardown(&mut children);
     for r in readers {
         let _ = r.join();
     }
@@ -229,12 +230,9 @@ fn spawn(p: &DevProcess, root: &Path) -> std::io::Result<Child> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // Each process leads its own group, so teardown kills its whole tree (e.g. `cargo run`'s server).
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
+    // Put each child in its own teardown group, so teardown kills its whole tree (e.g. `cargo run`'s
+    // child server), not just the shell.
+    Group::prepare(&mut cmd);
     cmd.spawn()
 }
 
@@ -294,40 +292,128 @@ fn wait_for_port(port: u16, timeout: Duration, shutdown: &AtomicBool) -> bool {
     false
 }
 
-/// SIGTERM every process group, give them a moment, then SIGKILL any survivors. On non-Unix, fall
-/// back to killing the direct children.
-fn teardown(group_pids: &[i32], children: &mut [(String, Child)]) {
-    #[cfg(unix)]
-    {
-        signal_groups(group_pids, libc::SIGTERM);
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while Instant::now() < deadline {
-            if children
-                .iter_mut()
-                .all(|(_, c)| matches!(c.try_wait(), Ok(Some(_))))
-            {
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-        signal_groups(group_pids, libc::SIGKILL);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = group_pids;
-        for (_, c) in children.iter_mut() {
-            let _ = c.kill();
-        }
-    }
-    for (_, c) in children.iter_mut() {
-        let _ = c.wait();
-    }
-}
+/// Per-platform teardown of each child and its descendants. On Unix every child leads its own
+/// process group and we signal the group — SIGTERM, a grace window, then SIGKILL any survivors. On
+/// Windows every child is assigned to one Job Object with kill-on-close, so terminating the job
+/// kills the whole tree at once (and an abrupt exit of `midas` does too).
+mod procgroup {
+    use std::process::{Child, Command};
 
-#[cfg(unix)]
-fn signal_groups(group_pids: &[i32], sig: i32) {
-    for &pid in group_pids {
-        // Negative pid → signal the whole process group led by `pid`.
-        unsafe { libc::kill(-pid, sig) };
+    #[cfg(unix)]
+    pub struct Group {
+        pids: Vec<i32>,
+    }
+
+    #[cfg(unix)]
+    impl Group {
+        pub fn new() -> std::io::Result<Self> {
+            Ok(Self { pids: Vec::new() })
+        }
+
+        /// Make the spawned child lead its own process group.
+        pub fn prepare(cmd: &mut Command) {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+
+        /// Record the child's pid (which is also its process-group id).
+        pub fn register(&mut self, child: &Child) {
+            self.pids.push(child.id() as i32);
+        }
+
+        /// SIGTERM every group, wait briefly for a clean exit, then SIGKILL any survivors and reap.
+        pub fn teardown(&self, children: &mut [(String, Child)]) {
+            self.signal(libc::SIGTERM);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while std::time::Instant::now() < deadline {
+                if children
+                    .iter_mut()
+                    .all(|(_, c)| matches!(c.try_wait(), Ok(Some(_))))
+                {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            self.signal(libc::SIGKILL);
+            for (_, c) in children.iter_mut() {
+                let _ = c.wait();
+            }
+        }
+
+        fn signal(&self, sig: i32) {
+            for &pid in &self.pids {
+                // Negative pid → signal the whole process group led by `pid`.
+                unsafe { libc::kill(-pid, sig) };
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+
+    #[cfg(windows)]
+    pub struct Group {
+        job: HANDLE,
+    }
+
+    #[cfg(windows)]
+    impl Group {
+        pub fn new() -> std::io::Result<Self> {
+            use windows_sys::Win32::System::JobObjects::{
+                CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            };
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job.is_null() {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // Kill every process in the job when its last handle closes, so even an abrupt exit
+                // of `midas` (panic, force-kill) tears the tree down instead of orphaning it.
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                let ok = SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+                if ok == 0 {
+                    let err = std::io::Error::last_os_error();
+                    CloseHandle(job);
+                    return Err(err);
+                }
+                Ok(Self { job })
+            }
+        }
+
+        /// No pre-spawn setup needed on Windows.
+        pub fn prepare(_cmd: &mut Command) {}
+
+        /// Assign the child to the job; descendants it spawns inherit the job, so tearing the job
+        /// down kills the whole tree. Done right after spawn — before the shell has launched its
+        /// command — so the race against early grandchildren is negligible, and kill-on-close
+        /// covers any that slip through.
+        pub fn register(&mut self, child: &Child) {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+            unsafe { AssignProcessToJobObject(self.job, child.as_raw_handle() as HANDLE) };
+        }
+
+        /// Terminate every process in the job (the whole tree) at once, then reap.
+        pub fn teardown(&self, children: &mut [(String, Child)]) {
+            use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+            unsafe { TerminateJobObject(self.job, 1) };
+            for (_, c) in children.iter_mut() {
+                let _ = c.wait();
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for Group {
+        fn drop(&mut self) {
+            unsafe { CloseHandle(self.job) };
+        }
     }
 }
