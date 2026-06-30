@@ -316,13 +316,17 @@ fn ship(
     git::fetch()?;
     let (ahead, behind) = git::ahead_behind(&cfg.trunk)?;
     if behind > 0 {
-        ctx.out
-            .info(format!("behind {behind} — rebasing on origin/{}", cfg.trunk));
+        ctx.out.info(format!(
+            "behind {behind} — rebasing on origin/{}",
+            cfg.trunk
+        ));
         ctx.out.step(format!("git rebase origin/{}", cfg.trunk));
         rebase_onto_trunk(cfg)?;
     } else {
-        ctx.out
-            .info(format!("up to date with origin/{} (ahead {ahead})", cfg.trunk));
+        ctx.out.info(format!(
+            "up to date with origin/{} (ahead {ahead})",
+            cfg.trunk
+        ));
     }
 
     // 2. Push (force-with-lease after a possible rebase; plain push to set upstream the first time).
@@ -359,9 +363,10 @@ fn ship(
     ));
     let url = gh::create_pr(&title, &body, &cfg.trunk, draft)?;
     ctx.out.success(format!("PR opened: {url}"));
-    ctx.out.data(&json!({ "url": url, "created": true, "draft": draft }), |_| {
-        url.clone()
-    });
+    ctx.out.data(
+        &json!({ "url": url, "created": true, "draft": draft }),
+        |_| url.clone(),
+    );
     Ok(())
 }
 

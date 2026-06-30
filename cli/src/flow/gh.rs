@@ -27,8 +27,7 @@ pub fn existing_pr(branch: &str) -> Option<String> {
     capture(
         "gh",
         &[
-            "pr", "list", "--head", branch, "--state", "open", "--json", "url", "--jq",
-            ".[0].url",
+            "pr", "list", "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url",
         ],
     )
     .ok()

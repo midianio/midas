@@ -109,7 +109,10 @@ pub async fn apply(url: &str, root: &Path) -> Result<Report> {
 
     let states = states(&migs, &done);
     let _ = conn.close().await;
-    Ok(Report { newly_applied, states })
+    Ok(Report {
+        newly_applied,
+        states,
+    })
 }
 
 /// Read the ledger and report which migrations are applied vs pending. Read-only except for a
@@ -126,7 +129,10 @@ pub async fn status(url: &str, root: &Path) -> Result<Report> {
     let done: BTreeSet<String> = applied.keys().cloned().collect();
     let states = states(&migs, &done);
     let _ = conn.close().await;
-    Ok(Report { newly_applied: Vec::new(), states })
+    Ok(Report {
+        newly_applied: Vec::new(),
+        states,
+    })
 }
 
 /// Read & parse `db/migrations/*.sql` under `root`, sorted by file name (matching the Go runner:
@@ -144,10 +150,14 @@ pub fn discover(root: &Path) -> Result<Vec<Migration>> {
         if !version.ends_with(".sql") || version.starts_with('_') {
             continue;
         }
-        let sql = std::fs::read_to_string(entry.path())
-            .map_err(|e| MigrateError::Failed(e.into()))?;
+        let sql =
+            std::fs::read_to_string(entry.path()).map_err(|e| MigrateError::Failed(e.into()))?;
         let checksum = sha256_hex(sql.as_bytes());
-        out.push(Migration { version, sql, checksum });
+        out.push(Migration {
+            version,
+            sql,
+            checksum,
+        });
     }
     out.sort_by(|a, b| a.version.cmp(&b.version));
     Ok(out)
@@ -310,7 +320,13 @@ mod tests {
 
     #[test]
     fn redact_hides_password() {
-        assert_eq!(redact("mysql://root:secret@127.0.0.1:3309/app"), "mysql://root@127.0.0.1:3309/app");
-        assert_eq!(redact("mysql://root@127.0.0.1:3309/app"), "mysql://root@127.0.0.1:3309/app");
+        assert_eq!(
+            redact("mysql://root:secret@127.0.0.1:3309/app"),
+            "mysql://root@127.0.0.1:3309/app"
+        );
+        assert_eq!(
+            redact("mysql://root@127.0.0.1:3309/app"),
+            "mysql://root@127.0.0.1:3309/app"
+        );
     }
 }
