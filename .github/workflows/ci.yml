@@ -58,7 +58,8 @@ jobs:
           bun run build
       - name: scaffolded project passes midas check
         working-directory: /tmp/scaffold/sample
-        run: "$GITHUB_WORKSPACE/target/debug/midas" check
+        run: |
+          "$GITHUB_WORKSPACE/target/debug/midas" check
 
   # We ship Windows binaries (release.yml), so the suite must pass where they run —
   # path separators, PATHEXT resolution, and process teardown all differ there.
