@@ -174,3 +174,52 @@ pub const SVELTE_APP: &[TemplateFile] = &[
         include_str!("../../../templates/svelte-app/src/routes/app/+page.svelte"),
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// Every file under `templates/` must be embedded in one of the tables above. `include_str!`
+    /// already breaks the build when an embedded file is deleted/renamed; this guards the other
+    /// direction — a file *added* to a template dir but never wired into the table would silently
+    /// not ship in the binary.
+    #[test]
+    fn every_template_file_on_disk_is_embedded() {
+        let templates_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../templates");
+        let embedded: Vec<&TemplateFile> = RUST_SERVICE.iter().chain(SVELTE_APP.iter()).collect();
+
+        let mut missing = Vec::new();
+        let mut on_disk = 0usize;
+        for entry in ignore::WalkBuilder::new(&templates_root)
+            .hidden(true)
+            .git_ignore(true)
+            .build()
+            .flatten()
+        {
+            if !entry.file_type().is_some_and(|t| t.is_file()) {
+                continue;
+            }
+            // Build artifacts from manually building a template in place are not template files.
+            let rel = entry.path().strip_prefix(&templates_root).unwrap();
+            let rel_s = rel.to_string_lossy().replace('\\', "/");
+            if rel_s.contains("/target/")
+                || rel_s.contains("/node_modules/")
+                || rel_s.ends_with("Cargo.lock")
+                || rel_s.ends_with("bun.lock")
+            {
+                continue;
+            }
+            on_disk += 1;
+            let body = std::fs::read_to_string(entry.path()).unwrap();
+            if !embedded.iter().any(|t| t.body == body) {
+                missing.push(rel_s);
+            }
+        }
+        assert!(on_disk > 0, "templates/ not found next to the cli crate");
+        assert!(
+            missing.is_empty(),
+            "template files on disk but not embedded in cmd/templates.rs: {missing:?}"
+        );
+    }
+}

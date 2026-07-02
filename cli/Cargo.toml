@@ -1,6 +1,6 @@
 [package]
 name = "midas"
-version = "0.1.2"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
@@ -11,6 +11,12 @@ description = "The midian engineering standard — CLI (scaffold, check, flow, s
 name = "midas"
 path = "src/main.rs"
 
+# CLI-0009: all output goes through the `core::Output` writer (stdout=data, stderr=logs) —
+# a stray print macro bypasses that seam, so clippy denies them outright.
+[lints.clippy]
+print_stdout = "deny"
+print_stderr = "deny"
+
 [dependencies]
 clap = { workspace = true }
 serde = { workspace = true }
@@ -19,7 +25,6 @@ toml = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-walkdir = { workspace = true }
 ignore = { workspace = true }
 globset = { workspace = true }
 regex = { workspace = true }
@@ -31,7 +36,6 @@ sqlx = { workspace = true }
 [dev-dependencies]
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
-trycmd = { workspace = true }
 tempfile = { workspace = true }
 
 # `midas dev` tears down each child's whole process tree: process groups on Unix, a Job Object on Windows.

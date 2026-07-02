@@ -17,11 +17,13 @@ fn write(root: &Path, rel: &str, body: &str) {
     fs::write(p, body).unwrap();
 }
 
-/// A fixture that conforms to the mechanized checks (state dir present, no banned calls).
+/// A fixture that conforms to the mechanized checks (state dir present, no banned calls, agent
+/// docs synced — AGT-0001).
 fn clean_fixture(root: &Path) {
     fs::create_dir_all(root.join("app/web/src/lib/state")).unwrap();
     write(root, "app/web/src/lib/utils.ts", "export const x = 1;\n");
     write(root, "app/api/src/main.rs", "fn main() {}\n");
+    midas().current_dir(root).arg("sync").assert().success();
 }
 
 #[test]
@@ -56,11 +58,36 @@ fn check_clean_fixture_passes() {
     let dir = tempfile::tempdir().unwrap();
     clean_fixture(dir.path());
 
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "exit 0 — no mechanical violations");
+
+    // The gate must not be vacuously clean: real checks fire on a conformant tree.
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let passed = v["mechanical"]["passed"].as_u64().unwrap();
+    assert!(passed >= 3, "expected real checks to pass, got {passed}");
+}
+
+#[test]
+fn check_deviation_against_hard_rule_is_an_error() {
+    // SPEC §7: a `hard` rule can't be ledgered away — the ledger entry itself fails the gate,
+    // even when the rule currently passes.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    write(
+        dir.path(),
+        "midas.toml",
+        "[standard]\nversion = \"0.2.0\"\n[deviations]\n\"BE-0010\" = \"we like bare clients\"\n",
+    );
     midas()
         .args(["check", "--root"])
         .arg(dir.path())
         .assert()
-        .success(); // exit 0 — no mechanical violations
+        .code(2)
+        .stderr(predicate::str::contains("mechanical violation"));
 }
 
 #[test]
@@ -99,6 +126,37 @@ fn check_violations_exit_2_and_report_ids() {
     );
     // partitioned output: both arms present
     assert!(v.get("mechanical").is_some() && v.get("semantic").is_some());
+}
+
+#[test]
+fn prompt_without_tty_is_a_usage_error() {
+    // CLI-0001/CLI-0008: a command that would prompt must exit 3 under no TTY instead of hanging —
+    // `touch state` with no name would ask for one.
+    let dir = tempfile::tempdir().unwrap();
+    midas()
+        .current_dir(dir.path())
+        .args(["touch", "state"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::is_empty().not());
+}
+
+#[test]
+fn expected_failure_is_never_silent() {
+    // Exit 2 must always carry a human message on stderr (CLI-0003) — a clean "no" with empty
+    // output is indistinguishable from a crash to a user or agent.
+    let dir = tempfile::tempdir().unwrap();
+    midas()
+        .current_dir(dir.path())
+        .args(["touch", "state", "foo"])
+        .assert()
+        .success();
+    midas()
+        .current_dir(dir.path())
+        .args(["touch", "state", "foo"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("already exists"));
 }
 
 #[test]

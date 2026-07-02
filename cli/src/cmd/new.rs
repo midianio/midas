@@ -202,7 +202,7 @@ Conventions live in the `midas` repo under `standards/`; this repo pins its vers
 fn ci_yml(profile: Profile) -> String {
     // Stack-specific gate hints, commented so the starter is valid as-is.
     let stack_gates = match profile {
-        Profile::App => "      # - run: cargo clippy --workspace -- -D warnings\n      # - run: bun run lint && bun run check\n",
+        Profile::App => "      # - run: cargo clippy --workspace -- -D warnings\n      # - run: bun run check && bun run build\n",
         Profile::Service | Profile::Cli => "      # - run: cargo clippy --workspace -- -D warnings\n      # - run: cargo test\n",
         Profile::Library => "      # - run: cargo test\n",
         Profile::Pipeline => "      # - run: <your pipeline lint/test>\n",
@@ -225,4 +225,4 @@ jobs:\n\
     )
 }
 
-const GITIGNORE: &str = "# Rust\n/target\n**/target\n\n# JS\nnode_modules\ndist\n.turbo\n\n# local env / os\n.env\n.env.local\n.DS_Store\n";
+const GITIGNORE: &str = "# Rust\n/target\n**/target\n\n# JS\nnode_modules\ndist\n.turbo\n.svelte-kit\nbuild\n\n# local env / os\n.env\n.env.local\n.DS_Store\n";

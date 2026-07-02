@@ -13,7 +13,10 @@ const EMBEDDED: &str = include_str!("../../registry/conventions.json");
 /// versions fully offline (same self-contained principle as the live registry — no repo fetch, no
 /// skew). The release flow appends a `registry/history/<version>.json` when the standard bumps; the
 /// `history_snapshot_matches_live` test below keeps the snapshot for the current version honest.
-const HISTORY: &[(&str, &str)] = &[("0.1.0", include_str!("../../registry/history/0.1.0.json"))];
+const HISTORY: &[(&str, &str)] = &[
+    ("0.1.0", include_str!("../../registry/history/0.1.0.json")),
+    ("0.2.0", include_str!("../../registry/history/0.2.0.json")),
+];
 
 #[derive(Debug, Deserialize)]
 pub struct Registry {
@@ -80,6 +83,16 @@ pub enum CheckSpec {
         #[serde(default)]
         must_not_exist: Vec<String>,
     },
+    /// Files matching `globs` must be gitignored (or absent) — e.g. `.env.local` must never be
+    /// committable. Any match visible to the gitignore-respecting scan is a violation.
+    BannedFile {
+        globs: Vec<String>,
+        #[serde(default)]
+        message: Option<String>,
+    },
+    /// The version-stamped `midas sync` managed block must be present and current in every agent
+    /// doc (`CLAUDE.md`, `AGENTS.md`), stamped with the version of the standard being evaluated.
+    ManagedBlock {},
     /// A generated artifact must be in sync with its source (deferred — reported as skipped).
     ArtifactHash {
         #[serde(default)]
@@ -207,5 +220,19 @@ mod tests {
     fn available_versions_includes_live() {
         let live = Registry::embedded().unwrap();
         assert!(Registry::available_versions().contains(&live.version));
+    }
+
+    /// The one-tag invariant (SPEC §7): the binary's crate version IS the standard version it
+    /// embeds. A release bumps `cli/Cargo.toml`, `registry/conventions.json`, and freezes
+    /// `registry/history/<ver>.json` together — this fails the build when they diverge.
+    #[test]
+    fn binary_version_equals_embedded_standard_version() {
+        let live = Registry::embedded().unwrap();
+        assert_eq!(
+            env!("CARGO_PKG_VERSION"),
+            live.version,
+            "cli/Cargo.toml version and registry/conventions.json version must move together \
+             (one git tag governs both)"
+        );
     }
 }

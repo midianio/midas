@@ -46,13 +46,30 @@ pub fn try_capture(program: &str, args: &[&str]) -> (String, bool) {
     }
 }
 
-/// Resolve a program on `PATH`, returning its absolute path.
+/// Resolve a program on `PATH`, returning its absolute path. On Windows a bare name like `git`
+/// is only on `PATH` as `git.exe`/`git.cmd`, so each `PATHEXT` extension is tried too.
 pub fn on_path(program: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
+    let exts: Vec<String> = if cfg!(windows) {
+        std::env::var("PATHEXT")
+            .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+            .split(';')
+            .filter(|e| !e.is_empty())
+            .map(str::to_string)
+            .collect()
+    } else {
+        Vec::new()
+    };
     for dir in std::env::split_paths(&paths) {
         let candidate = dir.join(program);
         if candidate.is_file() {
             return Some(candidate);
+        }
+        for ext in &exts {
+            let candidate = dir.join(format!("{program}{ext}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
     None

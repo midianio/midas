@@ -41,7 +41,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 - ✅ `manifest.rs` typed `midas.toml`
 - ✅ `registry.rs` embedded conventions.json model
 - ✅ `flow/` ported midflow → midas flow (git, gh, pscale, env, config)
-- ✅ `cmd/flow.rs` start·sync·pr·tag·end·status
+- ✅ `cmd/flow.rs` start·sync·ship·tag·end·status
 - ✅ `cmd/check.rs` mechanical engine (verified vs live midian: clean; vs fixture: catches 3, exit 2)
 - ✅ `checks/` banned-call · file-structure (artifact-hash/provenance/clippy = deferred → Skipped)
 - ✅ `cmd/sync.rs` managed-block writer
@@ -113,18 +113,19 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 - ✅ docs reconciled: SPEC/README/cli-README match built reality (inverted reviewer, mechanical-only
      gate exit 0/1/2/3, vendor-with-provenance default, upgrade/codemods deferred)
 
-### Surface: flow · add · new (+ templates) · dev · check · sync · doctor. Both code templates built + verified.
+### Surface: flow · touch (project + pieces, templates) · dev · migrate · check · drift · sync · doctor. Both code templates built + verified.
 Remaining work needs a decision or touches another repo:
 - **Template depth** — the `rust-service` + `svelte-app` starters are deliberately minimal. Growing
   them (sqlx + offline cache BE-0018, utoipa OpenAPI BE-0014, Clerk auth/billing STK-0005) needs
   DB/keys and a scope call. (A `cli-tool` template stays dropped: `midas` is the single one-stop CLI.)
 - **`midas setup`/`teardown`** — midian-specific bootstrap (deps + pscale tunnel); needs the exact
   bootstrap steps to encode.
-- **artifact-hash / provenance-drift / clippy** check kinds — registry carries them; engine reports
-  `skipped`. clippy/artifact-hash add real gating but are stack-specific (deferred by the grill).
+- **artifact-hash** check kind — registry carries it (BE-0014/FE-0006/OPS-0003); engine reports
+  `skipped`. provenance-drift/clippy kinds exist in the engine's vocabulary but no entry uses them
+  (clippy gates directly in CI via `[lints]`). banned-file (OPS-0012) and managed-block (AGT-0001)
+  are implemented and live.
 - **Wire `midas` into midian** — add a `midas.toml` + a `midas check` CI step to the midian repo
   (separate repo on `chore/rust-rewrite`; not touched autonomously).
-- **First git commit** — this repo has none yet (held per commit policy; everything is ready).
 - `add handler`/`pane`; `midas gen types`; `midas upgrade`/codemods (fleet-scale, deferred).
 
 ## Notes / decisions while building

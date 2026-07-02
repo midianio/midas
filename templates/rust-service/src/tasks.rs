@@ -13,7 +13,9 @@ pub struct Tasks {
 
 impl Tasks {
     pub fn new() -> Self {
-        Tasks { tracker: TaskTracker::new() }
+        Tasks {
+            tracker: TaskTracker::new(),
+        }
     }
 
     /// Spawn tracked background work. It outlives the request but is awaited at shutdown.

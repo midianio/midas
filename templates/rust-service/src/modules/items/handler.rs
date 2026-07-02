@@ -11,7 +11,7 @@ use axum::response::Response;
 // extractor (BE-0004); authz, when needed, goes through a central access seam (not scattered checks).
 #[utoipa::path(
     get,
-    path = "/items/items",
+    path = "/items",
     tag = "items",
     operation_id = "listItems",
     security(("clerk_jwt" = [])),

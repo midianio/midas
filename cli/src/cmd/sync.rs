@@ -9,13 +9,13 @@ use serde::Serialize;
 use serde_json::json;
 use std::path::PathBuf;
 
-const TARGETS: &[&str] = &["CLAUDE.md", "AGENTS.md"];
+pub(crate) const TARGETS: &[&str] = &["CLAUDE.md", "AGENTS.md"];
 const BEGIN_PREFIX: &str = "<!-- midas:";
 const END: &str = "<!-- /midas -->";
 
 #[derive(Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-enum BlockStatus {
+pub(crate) enum BlockStatus {
     Missing,
     Stale,
     Current,
@@ -110,7 +110,7 @@ pub fn run(ctx: &Ctx, check_only: bool) -> CliResult {
     Ok(())
 }
 
-fn status_of(existing: Option<&str>, version: &str) -> BlockStatus {
+pub(crate) fn status_of(existing: Option<&str>, version: &str) -> BlockStatus {
     let Some(text) = existing else {
         return BlockStatus::Missing;
     };

@@ -32,15 +32,15 @@ pub fn run(ctx: &Ctx, cmd: MigrateCmd) -> CliResult {
         }
     };
     let cfg = FlowConfig::from_manifest(&manifest);
-    let url = resolve_url(ctx, &cfg)?;
+    let url = resolve_url(&cfg)?;
     match cmd {
         MigrateCmd::Apply => {
-            let report = block_on(migrate::apply(&url, &root)).map_err(|e| to_cli_err(ctx, e))?;
+            let report = block_on(migrate::apply(&url, &root)).map_err(to_cli_err)?;
             print_apply(ctx, &report);
             Ok(())
         }
         MigrateCmd::Status => {
-            let report = block_on(migrate::status(&url, &root)).map_err(|e| to_cli_err(ctx, e))?;
+            let report = block_on(migrate::status(&url, &root)).map_err(to_cli_err)?;
             print_status(ctx, &report);
             Ok(())
         }
@@ -51,8 +51,8 @@ pub fn run(ctx: &Ctx, cmd: MigrateCmd) -> CliResult {
 /// Prints a concise line through `ctx.out`; a drift/apply failure aborts the caller.
 pub fn apply_pending(ctx: &Ctx, manifest: &Manifest, root: &Path) -> CliResult {
     let cfg = FlowConfig::from_manifest(manifest);
-    let url = resolve_url(ctx, &cfg)?;
-    let report = block_on(migrate::apply(&url, root)).map_err(|e| to_cli_err(ctx, e))?;
+    let url = resolve_url(&cfg)?;
+    let report = block_on(migrate::apply(&url, root)).map_err(to_cli_err)?;
     if report.newly_applied.is_empty() {
         ctx.out.step("migrations up to date");
     } else {
@@ -65,13 +65,13 @@ pub fn apply_pending(ctx: &Ctx, manifest: &Manifest, root: &Path) -> CliResult {
 }
 
 /// Resolve the sqlx URL and enforce the local-only guard (OPS-0009).
-fn resolve_url(ctx: &Ctx, cfg: &FlowConfig) -> Result<String, CliError> {
+fn resolve_url(cfg: &FlowConfig) -> Result<String, CliError> {
     let url = cfg.migrate_url();
     if !is_local_mysql_url(&url) {
-        let msg = "refusing to migrate a non-local database — schema reaches prod only via a \
-                   reviewed PlanetScale deploy request, never `midas migrate` (OPS-0009)";
-        ctx.out.error(msg);
-        return Err(CliError::expected(msg));
+        return Err(CliError::expected(
+            "refusing to migrate a non-local database — schema reaches prod only via a \
+             reviewed PlanetScale deploy request, never `midas migrate` (OPS-0009)",
+        ));
     }
     Ok(url)
 }
@@ -84,14 +84,11 @@ fn block_on<F: std::future::Future>(fut: F) -> F::Output {
         .block_on(fut)
 }
 
-/// `Drift` is a clean "no" (exit 2) — surface it via `ctx.out` since the harness won't print
-/// `Expected` for us. `Failed` (exit 1) is printed by the top-level `finish`.
-fn to_cli_err(ctx: &Ctx, e: MigrateError) -> CliError {
+/// `Drift` is a clean "no" (exit 2); `Failed` is a tool error (exit 1). Both are printed by the
+/// top-level `finish`.
+fn to_cli_err(e: MigrateError) -> CliError {
     match e {
-        MigrateError::Drift(msg) => {
-            ctx.out.error(&msg);
-            CliError::expected(msg)
-        }
+        MigrateError::Drift(msg) => CliError::expected(msg),
         MigrateError::Failed(err) => CliError::tool(err),
     }
 }

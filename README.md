@@ -28,7 +28,7 @@ code** (the midian Rust backend + Svelte frontend, and the `midflow` release CLI
 | `standards/process.md` | L4 — setup, CI, the midflow release flow, testing, migrations *(Phase 0)*. |
 | `standards/agents.md` | L5 — the AI/agent playbook (delivery + the semantic-review contract). |
 | `standards/playbooks/go-to-rust.md` | The reusable Go→Rust migration method *(prayer re-runs it; Phase 0)*. |
-| `cli/` | The one-stop `midas` binary — built: `flow`/`check`/`sync`/`doctor`/`add`/`new` on its internal `core` contract kernel (`cli/src/core/`) *(blueprint in `cli/README.md`, live status in `BUILD.md`)*. |
+| `cli/` | The one-stop `midas` binary — built: `flow`/`check`/`drift`/`sync`/`doctor`/`touch`/`dev`/`migrate` on its internal `core` contract kernel (`cli/src/core/`) *(blueprint in `cli/README.md`, live status in `BUILD.md`)*. |
 | `templates/` | Runnable project skeletons embedded into the binary *(`rust-service` + `svelte-app` built & verified)*. |
 | `packages/` | Home for **graduated** shared seams — empty for now; behavioral seams start vendored-with-provenance in each consumer *(→ Phase 3 to graduate)*. |
 | `registry/` | Machine-readable convention catalog (`conventions.json`), embedded in the binary *(built; codemods later)*. |
@@ -36,7 +36,7 @@ code** (the midian Rust backend + Svelte frontend, and the `midflow` release CLI
 ## How a project consumes it
 
 ```sh
-midas flow pr                   # release/branch flow: start·sync·pr·tag·end·status            — shipped
+midas flow ship                   # release/branch flow: start·sync·ship·tag·end·status            — shipped
 midas check                     # mechanical lint vs the pinned standard; report drift     — shipped
                                 #   (review-tier conventions are delegated to your review agent)
 midas drift                     # read-only briefing: what changes for this repo if the standard moves — shipped

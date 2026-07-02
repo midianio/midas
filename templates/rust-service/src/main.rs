@@ -34,7 +34,11 @@ async fn main() {
         }
     };
 
-    let app = routes::build(AppState { pool, http, tasks: tasks.clone() });
+    let app = routes::build(AppState {
+        pool,
+        http,
+        tasks: tasks.clone(),
+    });
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "8080".into());
     let addr = format!("0.0.0.0:{port}");
@@ -61,7 +65,9 @@ async fn main() {
 /// Graceful shutdown on Ctrl-C / SIGTERM.
 async fn shutdown_signal() {
     let ctrl_c = async {
-        tokio::signal::ctrl_c().await.expect("install ctrl_c handler");
+        tokio::signal::ctrl_c()
+            .await
+            .expect("install ctrl_c handler");
     };
     #[cfg(unix)]
     let terminate = async {

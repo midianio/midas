@@ -29,7 +29,15 @@ pub struct Scanner {
 impl Scanner {
     pub fn new(root: &Path) -> Result<Self> {
         let mut files = Vec::new();
-        for entry in WalkBuilder::new(root).hidden(true).git_ignore(true).build() {
+        // Hidden files are walked (banned-file checks target dotfiles like `.env.local`), but
+        // `.gitignore` rules still apply — even outside a git repo, so fixtures behave like repos.
+        for entry in WalkBuilder::new(root)
+            .hidden(false)
+            .git_ignore(true)
+            .require_git(false)
+            .filter_entry(|e| e.file_name() != ".git")
+            .build()
+        {
             let entry = match entry {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -51,6 +59,10 @@ impl Scanner {
         self.files.len()
     }
 
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     fn content(&mut self, rel: &Path) -> Option<&str> {
         let abs = self.root.join(rel);
         self.cache
@@ -64,8 +76,8 @@ impl Scanner {
         self.files
             .iter()
             .filter(|rel| {
-                let s = rel.to_string_lossy();
-                globs.is_match(s.as_ref()) && !allow.is_match(s.as_ref())
+                let s = rel_slash(rel);
+                globs.is_match(&s) && !allow.is_match(&s)
             })
             .cloned()
             .collect()
@@ -89,7 +101,7 @@ impl Scanner {
         let mut truncated = false;
 
         for rel in candidates {
-            let rel_str = rel.to_string_lossy().to_string();
+            let rel_str = rel_slash(&rel);
             let Some(content) = self.content(&rel) else {
                 continue;
             };
@@ -111,6 +123,24 @@ impl Scanner {
             }
         }
         Ok((findings, truncated))
+    }
+
+    /// Files matching `globs` must not be visible to the scan — i.e. they must be gitignored (or
+    /// absent). The walk already drops ignored files, so any match here is tracked/committable.
+    pub fn banned_file(&self, globs: &[String], message: Option<&str>) -> Result<Vec<Finding>> {
+        let glob_set = build_globset(globs)?;
+        Ok(self
+            .files
+            .iter()
+            .filter(|rel| glob_set.is_match(rel_slash(rel)))
+            .map(|rel| Finding {
+                file: rel_slash(rel),
+                line: 0,
+                text: message
+                    .unwrap_or("file must be gitignored, never committed")
+                    .into(),
+            })
+            .collect())
     }
 
     /// Check that required paths exist and forbidden paths do not (relative to root).
@@ -135,6 +165,17 @@ impl Scanner {
             }
         }
         findings
+    }
+}
+
+/// A relative path as a forward-slashed string — registry globs use `/`, and findings must render
+/// identically across platforms (Windows walks yield `\`-separated paths that `/`-globs never match).
+fn rel_slash(rel: &Path) -> String {
+    let s = rel.to_string_lossy();
+    if cfg!(windows) {
+        s.replace('\\', "/")
+    } else {
+        s.into_owned()
     }
 }
 

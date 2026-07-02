@@ -65,8 +65,9 @@ impl From<std::io::Error> for CliError {
     }
 }
 
-/// Map a finished command result to a process exit code. Prints a single human line to stderr for
-/// `Tool`/`Usage` failures; `Expected`/`Advisory` are assumed already surfaced via [`Output`].
+/// Map a finished command result to a process exit code, surfacing the failure on stderr. Every
+/// variant prints its message here — commands construct the error and return it, they don't
+/// self-print (a non-zero exit with empty stderr is a contract violation, CLI-0003).
 pub fn finish(out: &Output, r: CliResult) -> i32 {
     match &r {
         Ok(()) => 0,
@@ -74,7 +75,8 @@ pub fn finish(out: &Output, r: CliResult) -> i32 {
             match e {
                 CliError::Tool(_) => out.error(format!("{e}")),
                 CliError::Usage(m) => out.error(format!("usage: {m}")),
-                CliError::Expected(_) | CliError::Advisory(_) => {}
+                CliError::Expected(m) => out.error(m),
+                CliError::Advisory(m) => out.warn(m),
             }
             e.code()
         }

@@ -34,12 +34,16 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found", None),
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, "bad request", Some(m.clone())),
             AppError::Db(sqlx::Error::RowNotFound) => (StatusCode::NOT_FOUND, "not found", None),
-            AppError::Db(e) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error", Some(format!("db: {e}")))
-            }
-            AppError::Internal(m) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error", Some(m.clone()))
-            }
+            AppError::Db(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error",
+                Some(format!("db: {e}")),
+            ),
+            AppError::Internal(m) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal server error",
+                Some(m.clone()),
+            ),
         };
 
         if status.is_server_error() {
@@ -48,7 +52,11 @@ impl IntoResponse for AppError {
             }
         }
 
-        (status, Json(json!({ "status": text, "code": status.as_u16() }))).into_response()
+        (
+            status,
+            Json(json!({ "status": text, "code": status.as_u16() })),
+        )
+            .into_response()
     }
 }
 

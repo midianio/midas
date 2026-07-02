@@ -92,13 +92,35 @@ pub fn run(ctx: &Ctx, root_arg: Option<PathBuf>) -> CliResult {
             review_count += 1;
             continue;
         }
-        results.push(evaluate(conv, &manifest, has_manifest, &mut scanner));
+        results.push(evaluate(
+            conv,
+            &manifest,
+            has_manifest,
+            &mut scanner,
+            &registry.version,
+        ));
+    }
+
+    // Validate the deviation ledger itself (SPEC §7): a `hard` rule can't be ledgered away — the
+    // entry is an error even when the rule currently passes; an unknown id is probably a typo.
+    let mut ledger_errors: Vec<String> = Vec::new();
+    for id in manifest.deviations.keys() {
+        match registry.by_id(id) {
+            None => ctx.out.warn(format!(
+                "[deviations] {id} — unknown convention id (typo, or from a newer standard)"
+            )),
+            Some(c) if c.escape == Escape::Hard => ledger_errors.push(format!(
+                "[deviations] {id} — this rule is `hard`; a deviation entry is itself an error"
+            )),
+            Some(_) => {}
+        }
     }
 
     let failed = results
         .iter()
         .filter(|r| r.outcome == Outcome::Fail)
-        .count();
+        .count()
+        + ledger_errors.len();
     let passed = results
         .iter()
         .filter(|r| r.outcome == Outcome::Pass)
@@ -123,6 +145,7 @@ pub fn run(ctx: &Ctx, root_arg: Option<PathBuf>) -> CliResult {
             "checked": results.len(),
             "passed": passed, "failed": failed, "ledgered": ledgered,
             "advisory": advisory, "skipped": skipped,
+            "ledger_errors": &ledger_errors,
             "results": &results,
         },
         "semantic": {
@@ -171,6 +194,9 @@ pub fn run(ctx: &Ctx, root_arg: Option<PathBuf>) -> CliResult {
                 o.push_str(&format!("      {}\n", s.dim(&format!("… +{} more", r.findings.len() - 8))));
             }
         }
+        for e in &ledger_errors {
+            o.push_str(&format!("  {} {}\n", s.red("✗"), e));
+        }
         o.push_str(&format!(
             "\n  {} passed · {} failed · {} ledgered · {} advisory · {} skipped\n",
             s.green(&passed.to_string()),
@@ -208,11 +234,14 @@ pub struct Eval {
 /// Classify a single convention against the tree, mirroring `check`'s logic: applicability →
 /// mechanical spec → findings → escape/ledger classification. `drift` calls this once per registry
 /// version to compute the before/after outcomes for the same working tree + ledger.
+/// `standard_version` is the version of the registry being evaluated (the managed-block check
+/// asserts the synced block is stamped with it).
 pub fn outcome_of(
     conv: &Convention,
     manifest: &Manifest,
     has_manifest: bool,
     scanner: &mut Scanner,
+    standard_version: &str,
 ) -> Eval {
     let eval = |outcome: Outcome, findings: Vec<Finding>, note: Option<String>| Eval {
         outcome,
@@ -239,26 +268,50 @@ pub fn outcome_of(
         }
     };
 
+    // Registry globs/paths are layer-relative; `[layout]` maps them onto this repo's shape.
+    let prefix = layer_prefix(manifest, &conv.layer);
+
     let (findings, mut note) = match spec {
         CheckSpec::BannedCall {
             pattern,
             allow_in,
             globs,
             message,
-        } => match scanner.banned_call(pattern, allow_in, globs) {
-            Ok((f, truncated)) => {
-                let mut n = message.clone();
-                if truncated {
-                    n = Some(format!("{} (truncated)", n.unwrap_or_default()));
-                }
-                (f, n)
+        } => {
+            let globs = prefixed(&prefix, globs);
+            // Per-project exceptions from `[check.allow]` are repo-relative, appended as-is.
+            let mut allow = prefixed(&prefix, allow_in);
+            if let Some(extra) = manifest.check.allow.get(&conv.id) {
+                allow.extend(extra.iter().cloned());
             }
-            Err(e) => return eval(Outcome::Skipped, vec![], Some(format!("check error: {e}"))),
-        },
+            match scanner.banned_call(pattern, &allow, &globs) {
+                Ok((f, truncated)) => {
+                    let mut n = message.clone();
+                    if truncated {
+                        n = Some(format!("{} (truncated)", n.unwrap_or_default()));
+                    }
+                    (f, n)
+                }
+                Err(e) => return eval(Outcome::Skipped, vec![], Some(format!("check error: {e}"))),
+            }
+        }
         CheckSpec::FileStructure {
             must_exist,
             must_not_exist,
-        } => (scanner.file_structure(must_exist, must_not_exist), None),
+        } => (
+            scanner.file_structure(
+                &prefixed(&prefix, must_exist),
+                &prefixed(&prefix, must_not_exist),
+            ),
+            None,
+        ),
+        CheckSpec::BannedFile { globs, message } => {
+            match scanner.banned_file(&prefixed(&prefix, globs), message.as_deref()) {
+                Ok(f) => (f, None),
+                Err(e) => return eval(Outcome::Skipped, vec![], Some(format!("check error: {e}"))),
+            }
+        }
+        CheckSpec::ManagedBlock {} => (managed_block_findings(scanner, standard_version), None),
         CheckSpec::ArtifactHash { .. } => {
             return eval(
                 Outcome::Skipped,
@@ -311,13 +364,63 @@ pub fn outcome_of(
     }
 }
 
+/// The default layer→dir mapping (the midian monorepo shape), overridable via `[layout]`.
+fn layer_prefix(manifest: &Manifest, layer: &str) -> Option<String> {
+    let default = match layer {
+        "backend" => "app/api",
+        "frontend" => "app/web",
+        _ => return None, // stack-agnostic layers use repo-relative paths as written
+    };
+    let dir = manifest
+        .layout
+        .get(layer)
+        .map(String::as_str)
+        .unwrap_or(default)
+        .trim_matches('/');
+    if dir.is_empty() || dir == "." {
+        None
+    } else {
+        Some(dir.to_string())
+    }
+}
+
+fn prefixed(prefix: &Option<String>, paths: &[String]) -> Vec<String> {
+    match prefix {
+        Some(p) => paths.iter().map(|g| format!("{p}/{g}")).collect(),
+        None => paths.to_vec(),
+    }
+}
+
+/// AGT-0001: every agent doc must carry the managed block, stamped with the evaluated version.
+fn managed_block_findings(scanner: &Scanner, version: &str) -> Vec<Finding> {
+    use crate::cmd::sync::{status_of, BlockStatus, TARGETS};
+    let mut findings = Vec::new();
+    for name in TARGETS {
+        let existing = std::fs::read_to_string(scanner.root().join(name)).ok();
+        let text = match status_of(existing.as_deref(), version) {
+            BlockStatus::Current => continue,
+            BlockStatus::Stale => {
+                format!("managed block is stale (want {version}) — run `midas sync`")
+            }
+            BlockStatus::Missing => "managed block missing — run `midas sync`".to_string(),
+        };
+        findings.push(Finding {
+            file: name.to_string(),
+            line: 0,
+            text,
+        });
+    }
+    findings
+}
+
 fn evaluate(
     conv: &Convention,
     manifest: &Manifest,
     has_manifest: bool,
     scanner: &mut Scanner,
+    standard_version: &str,
 ) -> Result1 {
-    let e = outcome_of(conv, manifest, has_manifest, scanner);
+    let e = outcome_of(conv, manifest, has_manifest, scanner, standard_version);
     Result1 {
         id: conv.id.clone(),
         title: conv.title.clone(),
@@ -342,16 +445,17 @@ fn applicable(conv: &Convention, manifest: &Manifest, has_manifest: bool) -> boo
         return true;
     };
     let layer = conv.layer.as_str();
-    if !matches!(layer, "backend" | "frontend") {
+    if !matches!(layer, "backend" | "frontend" | "cli") {
         return true;
     }
     let current = match current_stack(manifest, layer) {
         Some(s) => s,
         None if has_manifest => return false, // project declares no such layer → n/a
         None => match layer {
+            // The no-manifest midian defaults; an app repo has no CLI layer.
             "backend" => "rust".into(),
             "frontend" => "svelte".into(),
-            _ => return true,
+            _ => return false,
         },
     };
     &current == want

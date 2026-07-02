@@ -23,12 +23,12 @@ reached locally through a `pscale` tunnel. Native via **Capacitor** + **fastlane
 One-time, one path. `midas setup` will own this end-to-end (today it's three manual steps in
 `README.md:41-50`).
 
-- **OPS-0005 [check]** — Bootstrap is `scripts/setup.sh` → `bun install` → `go install …/midflow@latest`
-  → `midflow doctor`. `setup.sh` registers the `merge.ours.driver` git driver so conflicts in
+- **OPS-0005 [review]** — Bootstrap is `scripts/setup.sh` → `bun install` → installing the `midas`
+  binary → `midas doctor`. `setup.sh` registers the `merge.ours.driver` git driver so conflicts in
   generated `db/gen/**` are resolved by regenerating, never hand-merged (`scripts/setup.sh:6-8`).
   *`bun run setup` is a different thing* — it's `bun install && turbo run build` (`package.json:12`),
   the deps+build step, not the git/tooling config.
-- **OPS-0005 [check]** — `midas doctor` is the readiness gate: `git`/`gh`/`go`/`pscale` on PATH,
+- **OPS-0005 [review]** — `midas doctor` is the readiness gate: `git`/`gh`/`go`/`pscale` on PATH,
   `gh`/`pscale` authed, `$GOPATH/bin` on PATH, git identity set (`internal/cmd/doctor.go:40-50`). It
   probes the *active* gh account via `gh api user`, not `gh auth status`, because the latter fails on
   any stale configured account even when the active token works (`doctor.go:104-123`). `midas check`
@@ -109,7 +109,7 @@ The flow is a CLI, not a wiki page: `start` → commit → `sync` → `pr` → s
   from GitHub PR review** — it's a separate manual click. On merge, CI deploys the DR and deletes the
   pscale branch. The legacy Go `db/cmd/migrate` binary is retired; `midas migrate` is the single runner
   for both local dev and CI.
-- **OPS-0009 [check]** — Clean up paired pscale branches: `midas flow end [--force]`. `--force` deletes
+- **OPS-0009 [review]** — Clean up paired pscale branches: `midas flow end [--force]`. `--force` deletes
   the derived paired branch when it exists (nothing to delete on a git-only flow), and a hardcoded
   protected-set (`main`/`dev`/parent) can never be deleted by any code path
   (`internal/cmd/db.go:114-133`; `internal/flow/pscale.go:75-93`).
@@ -198,13 +198,13 @@ OPS-0001..0004 are defined in `README.md`; this doc adds:
 
 | ID | Rule | Tier | Escape |
 | --- | --- | --- | --- |
-| OPS-0005 | One-command bootstrap (`scripts/setup.sh`→`bun install`→midflow→`doctor`); `midas setup` owns it. | check | advisory |
-| OPS-0006 | Local dev = pscale proxy `:3309` + dotenv chain (`ENV_FILE`→`.env`→`.env.local`); `midas flow` owns the `.env.local` tunnel block — don't hand-edit. | check | hard |
-| OPS-0007 | Branch `<type>/<slug>` off `dev` (trunk); `main` = prod; tags semver. | check | ledgered |
-| OPS-0008 | Migrations forward-only, numbered `NNN_`, one DDL set/file, no txn; fix-forward. (= BE-0007) | check | hard |
+| OPS-0005 | One-command bootstrap (`scripts/setup.sh`→`bun install`→midflow→`doctor`); `midas setup` owns it. | review | advisory |
+| OPS-0006 | Local dev = pscale proxy `:3309` + dotenv chain (`ENV_FILE`→`.env`→`.env.local`); `midas flow` owns the `.env.local` tunnel block — don't hand-edit. | review | hard |
+| OPS-0007 | Branch `<type>/<slug>` off `dev` (trunk); `main` = prod; tags semver `vX.Y.Z`. | review | ledgered |
+| OPS-0008 | Migrations forward-only, numbered `NNN_`, one DDL set/file, no txn; fix-forward. (= BE-0007) | review | hard |
 | OPS-0009 | Schema→prod only via PS deploy request reviewed in the UI; DR approval separate from GH review; never run `migrate` at prod. | review | hard |
 | OPS-0010 | Squash-merge to `dev`; risk-tiered review (features/schema/auth/payments wait; low-risk self-merge after 24h). | review | advisory |
-| OPS-0011 | Husky + lint-staged pre-commit not bypassed (`--no-verify`). | check | hard |
+| OPS-0011 | Husky + lint-staged pre-commit not bypassed (`--no-verify`). | review | hard |
 | OPS-0012 | Never commit `.env.local`/secrets; rotate on leak; never force-push `main`/`dev`. | check | hard |
 | OPS-0013 | Native ships via manual fastlane `workflow_dispatch`; static SPA via `CAPACITOR_BUILD`; build no. = commit count. | review | ledgered (web-only) |
 

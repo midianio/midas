@@ -19,6 +19,11 @@ pub struct Manifest {
     /// Per-layer stack state; a layer is checked vs its CURRENT stack.
     #[serde(default)]
     pub stack: BTreeMap<String, StackLayer>,
+    /// Where each layer lives, relative to the repo root (`[layout] backend = "app/api"`). The
+    /// registry's check globs are layer-relative; this maps them onto the repo. Defaults to the
+    /// midian monorepo shape (`backend = "app/api"`, `frontend = "app/web"`).
+    #[serde(default)]
+    pub layout: BTreeMap<String, String>,
     #[serde(default)]
     pub check: CheckCfg,
     #[serde(default)]
@@ -35,7 +40,7 @@ pub struct Manifest {
 pub struct Standard {
     #[serde(default)]
     pub version: String,
-    /// service | app | library | pipeline. Part of the schema; not yet consumed by `check`.
+    /// service | app | cli | library | pipeline. Part of the schema; not yet consumed by `check`.
     #[serde(default)]
     #[allow(dead_code)]
     pub profile: String,
@@ -51,9 +56,16 @@ pub struct StackLayer {
 
 #[derive(Debug, Deserialize, Default)]
 pub struct CheckCfg {
-    /// Opt-in: make exit 4 (advisory findings) block CI.
+    /// Surfaced verbatim in `midas check --json` for the external review agent / CI to decide
+    /// whether to escalate its own semantic findings to blocking. `midas check` never reads it —
+    /// the mechanical gate stays deterministic (SPEC §8).
     #[serde(default)]
     pub semantic_strict: bool,
+    /// Per-project allow-list: convention id → extra repo-relative `allow_in` globs, merged into
+    /// that convention's mechanical check. The seam for a project-specific exception that doesn't
+    /// belong in the org registry (e.g. midian's sharelink service inlining uuid, BE-0016).
+    #[serde(default)]
+    pub allow: BTreeMap<String, Vec<String>>,
 }
 
 /// `[flow]` overrides for the ported release flow. Every field is optional; omitted fields fall

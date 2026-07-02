@@ -266,12 +266,15 @@ fn pipe<R: std::io::Read + Send + 'static>(
     to_stdout: bool,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
+        use std::io::Write;
         for line in BufReader::new(stream).lines() {
             let Ok(line) = line else { break };
+            // Raw child-output passthrough — not a print macro (CLI-0009): a closed pipe must not
+            // panic the streamer, and the write is explicit about which channel it mirrors.
             if to_stdout {
-                println!("{prefix} {line}");
+                let _ = writeln!(std::io::stdout().lock(), "{prefix} {line}");
             } else {
-                eprintln!("{prefix} {line}");
+                let _ = writeln!(std::io::stderr().lock(), "{prefix} {line}");
             }
         }
     })

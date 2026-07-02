@@ -13,7 +13,7 @@
 	async function loadItems() {
 		error = null;
 		try {
-			const items = await api<{ id: string }[]>("/items/items");
+			const items = await api<{ id: string }[]>("/items");
 			serverId = items[0]?.id ?? "(none)";
 		} catch (e) {
 			error = e instanceof Error ? e.message : "request failed";

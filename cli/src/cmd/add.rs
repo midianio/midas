@@ -377,7 +377,7 @@ fn module_handler_rs(snake: &str, pascal: &str) -> String {
         "// RequireAuth extractor (BE-0004); authz, when needed, via the central access::require seam.".to_string(),
         "#[utoipa::path(".to_string(),
         "\tget,".to_string(),
-        format!("\tpath = \"/{snake}/{snake}\","),
+        format!("\tpath = \"/{snake}\","),
         format!("\ttag = \"{snake}\","),
         format!("\toperation_id = \"list{pascal}\","),
         "\tsecurity((\"clerk_jwt\" = [])),".to_string(),

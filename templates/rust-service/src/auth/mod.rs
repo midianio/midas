@@ -28,7 +28,10 @@ where
         let token = extract_token(&parts.headers).ok_or(AppError::Unauthorized)?;
         // DEV STUB: accept any non-empty token and treat it as the user id. Replace with real
         // verification (see the module TODO) before this is exposed to untrusted callers.
-        Ok(RequireAuth { user_id: token, sid: None })
+        Ok(RequireAuth {
+            user_id: token,
+            sid: None,
+        })
     }
 }
 

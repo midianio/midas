@@ -131,7 +131,7 @@ CLI standard, [`standards/cli/`](./standards/cli/)).
 
 | Command | Does | Status |
 | --- | --- | --- |
-| `midas flow start·sync·pr·tag·end·status` | The release/branch flow (ported from midflow). | **shipped** |
+| `midas flow start·sync·ship·tag·end·status` | The release/branch flow (ported from midflow). | **shipped** |
 | `midas check` | Lint vs the pinned standard — **mechanical only**; review-tier conventions are delegated to an external agent ([§8](#8-enforcement)). The CI gate. | **shipped** |
 | `midas drift [<from>..<to>]` | **Read-only** drift briefing for a model: diff two embedded standard versions *as outcomes against this repo* (default pinned→embedded). Runs `check`'s classifier under each version and reports the transitions — `blocking` / `action_needed` / `ledger_cleanup` — with the `file:line` worklist, plus standing drift. Never gates (exit 0); the plan a future `midas upgrade` executes ([§7](#7-drift--versioning)). | **shipped** |
 | `midas sync` | Materialize the version-stamped managed block into the repo ([§8](#agent-playbook-delivery)). | **shipped** |
@@ -139,7 +139,8 @@ CLI standard, [`standards/cli/`](./standards/cli/)).
 | `midas touch state\|migration\|component\|module` | Stamp a conventional piece — deterministic bytes (the `add-*` skills promoted to commands). `module` scaffolds the 4-file backend module + wires `pub mod` into `modules/mod.rs`. | **shipped** |
 | `midas touch handler\|pane\|…` | The remaining kinds. | next |
 | `midas touch project <name> --profile <p>` | Scaffold a conformant project: `midas.toml` (version-pinned), agent docs with the synced block, starter CI, dir shape — plus runnable skeletons: `rust-service` (`service`) and `rust-service` + `svelte-app` (`app`). | **shipped** |
-| `midas dev [names…]` | Run `[dev].processes` concurrently with prefixed streaming output + one-Ctrl-C teardown (each process leads its own group). When `[dev].tunnel`, raises the pscale tunnel (reusing `[flow]` + the paired branch) first. Replaces `turbo run dev` + the tunnel sidecar. | **shipped** |
+| `midas dev [names…]` | Run `[dev].processes` concurrently with prefixed streaming output + one-Ctrl-C teardown (each process leads its own group). When `[dev].tunnel`, raises the pscale tunnel (reusing `[flow]` + the paired branch) first, then applies pending migrations (`[dev].migrate`, on by default). Replaces `turbo run dev` + the tunnel sidecar. | **shipped** |
+| `midas migrate [apply\|status]` | Apply the forward-only `db/migrations/` to the **local tunnel only** (OPS-0009 guard: refuses non-local targets), or report applied/pending. Checksum-ledgered; also run automatically by `midas dev`. | **shipped** |
 | `midas setup` / `midas teardown` | Bootstrap / tear down local dev (deps, pscale proxy, env, hooks). | later |
 | `midas gen types` | Regenerate the TS client from the backend OpenAPI. | later |
 | `midas upgrade [--to <ver>]` | Move to a newer standard version; run codemods; report residuals. | deferred |
@@ -194,7 +195,7 @@ materialized standard.
 ```toml
 [standard]
 version = "0.4.1"          # pins midas: CLI + embedded rules + shared-package versions (one git tag)
-profile = "app"            # service | app | library | pipeline
+profile = "app"            # service | app | cli | library | pipeline
 
 [stack]                    # per-layer current/target; midas check runs a layer vs its CURRENT stack
 backend.current  = "go"    # prayer: still Go …
@@ -216,7 +217,15 @@ tunnel_port   = 3309
 
 [deviations]               # intentional, ledgered escape hatches: convention ID → reason
 "FE-0004" = "web-only — no Capacitor adapter switch"
-"BE-0012" = "Vitess can't enforce FKs; integrity is checked in the access seam instead"
+"BE-0018" = "runtime-checked queries for now — no .sqlx offline cache yet"
+# (a deviation entry against a `hard`-escape rule is itself a check failure)
+
+[check.allow]                # per-project allow-list exceptions, merged into a rule's mechanical check
+"BE-0016" = ["app/api/src/modules/sharelink/service.rs"]   # midian: sharelink inlines uuid deliberately
+
+[layout]                   # where each layer lives; the registry's check globs are layer-relative
+backend  = "app/api"       # (these are the defaults — the midian monorepo shape)
+frontend = "app/web"
 ```
 
 `midas check` treats `[deviations]` as expected; anything else that fails a `check`-tier rule is real
@@ -245,8 +254,9 @@ package versions. One knob.
    `[deviations]` entries went dead — so the upgrade is a worklist, not a guess.
 2. **Project-ahead / divergent** — the project violates a `check`-tier rule of its *own pinned*
    version. The real failure: fix it, or *ledger it* in `[deviations]` with a reason.
-3. **Local invention** — a pattern the standard doesn't cover. `midas check --suggest` surfaces it as
-   a **candidate convention to promote upstream** ([§9](#9-how-the-standard-evolves)).
+3. **Local invention** — a pattern the standard doesn't cover. A planned `midas check --suggest`
+   will surface it as a **candidate convention to promote upstream** ([§9](#9-how-the-standard-evolves));
+   until then, promotion is by hand (spot it in review, open the RFC-lite PR).
 
 ### Embed, don't fetch
 
@@ -298,9 +308,13 @@ SEMANTIC    (review-tier · delegated out-of-process — count only)
 
 - **Mechanical (`check` tier)** — structure, banned-call (regex/substring + allow-list + globs),
   artifact-hash drift, vendored-copy provenance drift, clippy. Deterministic. **Owns the blocking
-  exit code (`2`).** Implemented today: banned-call + file-structure; artifact-hash, provenance-drift,
-  and clippy are carried in the registry but reported `skipped` for now. The drift model + deviation
-  ledger apply here.
+  exit code (`2`).** Implemented today: banned-call, file-structure, banned-file (gitignore-enforced
+  paths, OPS-0012), and managed-block (AGT-0001); artifact-hash (BE-0014/FE-0006/OPS-0003) is carried
+  in the registry but reported `skipped` until the engine lands it; provenance-drift and clippy kinds
+  exist in the engine but no registry entry uses them yet (clippy runs directly in CI via `[lints]`).
+  The drift model + deviation ledger apply here — and a rule is `check`-tier **only if it carries a
+  real spec**; aspirationally-mechanical rules stay `review` so the gate never silently skips what it
+  claims to enforce.
 - **Semantic (`review` tier)** — not machine-checkable ("handler is thin", "no business logic in a
   component", "PII scrubbed at the boundary"). **Delegated out-of-process** to the team's review
   agent, which reads the convention in `standards/` and the mechanical baseline from `midas check
@@ -341,7 +355,7 @@ The conventions + the agent's marching orders need to reach every repo without c
 agent config (`midian/CLAUDE.md` is GitNexus-specific; each repo has its own `AGENTS.md`, `.cursor`):
 
 - **`midas sync` writes a version-stamped managed block** — `<!-- midas:0.4.1 -->…<!-- /midas -->` —
-  into each repo's `CLAUDE.md` / `AGENTS.md` / `.cursor` rules: naming the pinned version, pointing at
+  into each repo's `CLAUDE.md` / `AGENTS.md`: naming the pinned version, pointing at
   the conventions, instructing the agent to treat `midas check`/`add` as source of truth. **Project
   content lives outside the block, untouched.** A stale/missing block is `check`-tier drift.
 - **Executable skills ship as a versioned bundle** (delivery via `midas setup`, planned) — thin
@@ -352,8 +366,8 @@ agent config (`midian/CLAUDE.md` is GitNexus-specific; each repo has its own `AG
 
 ## 9. How the standard evolves
 
-- **Source of change is practice.** `midas check --suggest` surfaces local inventions; promoting one
-  is the normal path to a new entry.
+- **Source of change is practice.** Local inventions surface in review (a planned `midas check
+  --suggest` will automate this); promoting one is the normal path to a new entry.
 - **RFC-lite.** A change to a `hard`/`ledgered` entry is a short PR against a `proposed` entry
   (`proposed` → `adopted` → `deprecated`); each entry has an owner.
 - **The standard governs itself.** This repo uses its own `midas flow` + `midas check`. Dogfooding is
@@ -391,7 +405,8 @@ Still open:
    `app-native`)?
 2. **Package graduation criteria** — what evidence concretely promotes a vendored seam to a package (N
    releases unchanged across both consumers? a manual call?).
-3. **Provenance-drift check** — carried in the registry but not yet implemented in the engine (reported
+3. **Provenance-drift check** — the check kind exists in the engine's vocabulary but no registry
+   entry uses it and it is not implemented (reported
    `skipped`); design the canonical-version lookup that flags a drifted vendored copy.
 
 ---

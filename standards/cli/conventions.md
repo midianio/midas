@@ -13,7 +13,7 @@ tier — `[check]` (mechanical) or `[review]` (semantic).
 
 Rust · **clap** (derive) · the internal **`core`** contract kernel (`cli/src/core/`) · `serde`/`serde_json` (for
 `--json`) · `anyhow` (internal error context) → mapped to typed exit codes · `tracing` (to stderr) ·
-`assert_cmd`/`trycmd` (tests) · single static binary (musl) · `clippy -D warnings`.
+`assert_cmd` (tests) · single static binary (musl) · `clippy -D warnings`.
 
 ## The hard rule: every command is agent-runnable (`CLI-0001`)
 
@@ -70,7 +70,7 @@ the same structural-correctness move as the backend's `response.rs`/`AppError`.
 
 ## Command structure (`CLI-0010` `[review]`)
 
-- **Noun-first grouping** for multi-domain tools: `midas flow pr`, `midas touch module`, `midas check`.
+- **Noun-first grouping** for multi-domain tools: `midas flow ship`, `midas touch module`, `midas check`.
   Subcommands are kebab-case; the noun is the area, the verb is the action.
 - `--help` is complete and accurate on every (sub)command — clap derive gives this for free; keep doc
   comments on every arg.
@@ -103,7 +103,7 @@ the same structural-correctness move as the backend's `response.rs`/`AppError`.
 
 ## Testing (`CLI-0008` `[check]`)
 
-- **Snapshot-test the surface** with `assert_cmd`/`trycmd`: assert the human output, the `--json`
+- **Snapshot-test the surface** with `assert_cmd`: assert the human output, the `--json`
   shape, **and the exit code** for the happy path, the negative path (exit `2`), and the usage-error
   path (exit `3`). The `--json` schema test is the contract guard — a breaking schema change fails CI.
 - A command that prompts must have a test proving it runs to completion non-interactively with the

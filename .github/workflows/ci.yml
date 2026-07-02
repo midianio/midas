@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -24,5 +24,51 @@ jobs:
         run: cargo test --workspace
 
       # Dogfood: midas check must be clean on midas (the standard governs itself, SPEC §9).
+      - name: midas check (self)
+        run: cargo run --quiet -- check --root .
+
+  # The templates ship inside the binary and claim to be conformant skeletons — so scaffold a
+  # fresh project and hold it to the same gates a real consumer would face.
+  templates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+      - name: build midas
+        run: cargo build --quiet
+      - name: scaffold app-profile project
+        run: |
+          mkdir -p /tmp/scaffold && cd /tmp/scaffold
+          "$GITHUB_WORKSPACE/target/debug/midas" touch project sample --profile app
+      - name: rust-service gates
+        working-directory: /tmp/scaffold/sample/app/api
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+      - name: svelte-app gates
+        working-directory: /tmp/scaffold/sample/app/web
+        run: |
+          bun install
+          bun run check
+          bun run build
+      - name: scaffolded project passes midas check
+        working-directory: /tmp/scaffold/sample
+        run: "$GITHUB_WORKSPACE/target/debug/midas" check
+
+  # We ship Windows binaries (release.yml), so the suite must pass where they run —
+  # path separators, PATHEXT resolution, and process teardown all differ there.
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: test
+        run: cargo test --workspace
       - name: midas check (self)
         run: cargo run --quiet -- check --root .

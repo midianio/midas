@@ -31,7 +31,12 @@ fn now_rfc3339() -> String {
 pub fn ok<T: Serialize>(data: T) -> Response {
     (
         StatusCode::OK,
-        Json(ApiResponse { data, code: 200, timestamp: now_rfc3339(), count: 1 }),
+        Json(ApiResponse {
+            data,
+            code: 200,
+            timestamp: now_rfc3339(),
+            count: 1,
+        }),
     )
         .into_response()
 }
@@ -41,7 +46,12 @@ pub fn ok_list<T: Serialize>(items: Vec<T>) -> Response {
     let count = items.len();
     (
         StatusCode::OK,
-        Json(ApiResponse { data: items, code: 200, timestamp: now_rfc3339(), count }),
+        Json(ApiResponse {
+            data: items,
+            code: 200,
+            timestamp: now_rfc3339(),
+            count,
+        }),
     )
         .into_response()
 }

@@ -256,12 +256,14 @@ pub fn run(
         let ct = to_reg.by_id(id);
 
         let old_state = match cf {
-            Some(c) => State::of(outcome_of(c, &manifest, has_manifest, &mut scanner).outcome),
+            Some(c) => State::of(
+                outcome_of(c, &manifest, has_manifest, &mut scanner, &from_version).outcome,
+            ),
             None => State::Absent,
         };
         let (new_state, new_findings) = match ct {
             Some(c) => {
-                let e = outcome_of(c, &manifest, has_manifest, &mut scanner);
+                let e = outcome_of(c, &manifest, has_manifest, &mut scanner, &to_version);
                 (State::of(e.outcome), e.findings)
             }
             None => (State::Absent, vec![]),
@@ -331,7 +333,7 @@ pub fn run(
         if seen.contains(&c.id) {
             continue;
         }
-        let e = outcome_of(c, &manifest, has_manifest, &mut scanner);
+        let e = outcome_of(c, &manifest, has_manifest, &mut scanner, &to_version);
         let deviated = manifest.deviations.contains_key(&c.id);
         if deviated && e.outcome == Outcome::Pass {
             standing.push(Standing {
