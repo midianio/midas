@@ -16,6 +16,7 @@ const EMBEDDED: &str = include_str!("../../registry/conventions.json");
 const HISTORY: &[(&str, &str)] = &[
     ("0.1.0", include_str!("../../registry/history/0.1.0.json")),
     ("0.2.0", include_str!("../../registry/history/0.2.0.json")),
+    ("0.3.0", include_str!("../../registry/history/0.3.0.json")),
 ];
 
 #[derive(Debug, Deserialize)]
