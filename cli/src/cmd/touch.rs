@@ -46,6 +46,7 @@ pub enum TouchCmd {
         force: bool,
     },
     /// A forward-only numbered migration (OPS-0008) in db/migrations/NNN_<slug>.sql.
+    /// Apply it with `midas migrate`.
     Migration {
         /// Migration slug, e.g. `add-notes-index`
         slug: Option<String>,

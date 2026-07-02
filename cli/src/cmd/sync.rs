@@ -7,7 +7,6 @@ use crate::core::Ctx;
 use crate::registry::Registry;
 use serde::Serialize;
 use serde_json::json;
-use std::path::PathBuf;
 
 pub(crate) const TARGETS: &[&str] = &["CLAUDE.md", "AGENTS.md"];
 const BEGIN_PREFIX: &str = "<!-- midas:";
@@ -27,10 +26,27 @@ struct Target {
     status: BlockStatus,
 }
 
+/// Write the managed block into every agent doc under `root` (no output). Returns
+/// `(version, changed targets)` — the quiet core `run` and `midas adopt` share.
+pub(crate) fn write_blocks(root: &std::path::Path) -> Result<(String, Vec<String>), CliError> {
+    let version = Registry::embedded()
+        .map(|r| r.version)
+        .unwrap_or_else(|_| "0.0.0".into());
+    let block = managed_block(&version);
+    let mut changed: Vec<String> = Vec::new();
+    for name in TARGETS {
+        let path = root.join(name);
+        let existing = std::fs::read_to_string(&path).ok();
+        if let Some(next) = next_content(existing.as_deref(), &block) {
+            std::fs::write(&path, next)?;
+            changed.push(name.to_string());
+        }
+    }
+    Ok((version, changed))
+}
+
 pub fn run(ctx: &Ctx, check_only: bool) -> CliResult {
-    let root = crate::proc::capture("git", &["rev-parse", "--show-toplevel"])
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+    let root = crate::manifest::resolve_root(&ctx.global)?;
     let version = Registry::embedded()
         .map(|r| r.version)
         .unwrap_or_else(|_| "0.0.0".into());

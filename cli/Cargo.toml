@@ -19,6 +19,7 @@ print_stderr = "deny"
 
 [dependencies]
 clap = { workspace = true }
+clap_complete = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

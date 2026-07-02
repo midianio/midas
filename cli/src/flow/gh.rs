@@ -34,6 +34,25 @@ pub fn existing_pr(branch: &str) -> Option<String> {
     .filter(|s| !s.is_empty())
 }
 
+/// True when a *merged* PR exists with `branch` as its head — the squash-merge-safe "is this work
+/// landed?" probe (`git branch --merged` can't see a squash). False on lookup failure.
+pub fn merged_pr_exists(branch: &str) -> bool {
+    capture(
+        "gh",
+        &[
+            "pr", "list", "--head", branch, "--state", "merged", "--json", "number", "--jq",
+            "length",
+        ],
+    )
+    .map(|n| n.parse::<u64>().map(|n| n > 0).unwrap_or(false))
+    .unwrap_or(false)
+}
+
+/// `gh pr merge --auto --squash` on the open PR whose head is `branch`.
+pub fn enable_auto_merge(branch: &str) -> Result<()> {
+    capture("gh", &["pr", "merge", branch, "--auto", "--squash"]).map(|_| ())
+}
+
 /// `gh pr create`; returns the PR URL printed on stdout.
 pub fn create_pr(title: &str, body: &str, base: &str, draft: bool) -> Result<String> {
     let mut args = vec![

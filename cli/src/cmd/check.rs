@@ -5,11 +5,13 @@
 use crate::checks::{Finding, Scanner};
 use crate::core::exit::{CliError, CliResult};
 use crate::core::Ctx;
+use crate::flow::config::FlowConfig;
 use crate::manifest::Manifest;
 use crate::registry::{CheckSpec, Convention, Escape, Registry, Tier};
 use serde::Serialize;
 use serde_json::json;
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::path::Path;
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -41,20 +43,8 @@ struct Result1 {
     doc: Option<String>,
 }
 
-pub fn run(ctx: &Ctx, root_arg: Option<PathBuf>) -> CliResult {
-    // Resolve the project root: --root, else the git toplevel, else cwd.
-    let root = match root_arg {
-        Some(r) => r,
-        None => crate::proc::capture("git", &["rev-parse", "--show-toplevel"])
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
-    };
-    if !root.is_dir() {
-        return Err(CliError::usage(format!(
-            "root {} is not a directory",
-            root.display()
-        )));
-    }
+pub fn run(ctx: &Ctx, changed_only: bool) -> CliResult {
+    let root = crate::manifest::resolve_root(&ctx.global)?;
 
     let (manifest, has_manifest) = match Manifest::find(&root)? {
         Some((m, _)) => (m, true),
@@ -78,11 +68,21 @@ pub fn run(ctx: &Ctx, root_arg: Option<PathBuf>) -> CliResult {
     }
 
     let mut scanner = Scanner::new(&root).map_err(CliError::tool)?;
-    ctx.out.step(format!(
-        "scanning {} ({} files)",
-        root.display(),
-        scanner.file_count()
-    ));
+    if changed_only {
+        let changed = changed_files(&root, &FlowConfig::from_manifest(&manifest).trunk)?;
+        scanner.retain(&changed);
+        ctx.out.step(format!(
+            "scanning {} ({} changed files; structure checks still run repo-wide)",
+            root.display(),
+            scanner.file_count()
+        ));
+    } else {
+        ctx.out.step(format!(
+            "scanning {} ({} files)",
+            root.display(),
+            scanner.file_count()
+        ));
+    }
 
     let mut results: Vec<Result1> = Vec::new();
     let mut review_count = 0usize;
@@ -473,12 +473,49 @@ fn escape_str(e: Escape) -> &'static str {
     }
 }
 
-// Allow `--root` to accept a string path from clap.
-pub fn parse_root(s: &str) -> std::result::Result<PathBuf, String> {
-    let p = Path::new(s);
-    if p.exists() {
-        Ok(p.to_path_buf())
-    } else {
-        Err(format!("path does not exist: {s}"))
+/// The changed-file set for `--changed`: everything different from the merge-base with
+/// origin/<trunk> (committed + staged + unstaged) plus untracked files. Without an origin/<trunk>
+/// to diff against it degrades to working-tree changes vs HEAD. Paths come back toplevel-relative
+/// from git; they're remapped to be relative to `root` so they match the scanner's file list.
+fn changed_files(root: &Path, trunk: &str) -> Result<HashSet<String>, CliError> {
+    let git = |args: &[&str]| -> Result<String, CliError> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .map_err(CliError::tool)?;
+        if !out.status.success() {
+            return Err(CliError::usage(format!(
+                "--changed requires a git repo: git {} failed",
+                args.join(" ")
+            )));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+
+    let toplevel =
+        std::fs::canonicalize(git(&["rev-parse", "--show-toplevel"])?).map_err(CliError::tool)?;
+    let base = git(&["merge-base", &format!("origin/{trunk}"), "HEAD"]).ok();
+
+    let mut raw: Vec<String> = Vec::new();
+    let diff_target = base.as_deref().unwrap_or("HEAD");
+    if let Ok(out) = git(&["diff", "--name-only", diff_target]) {
+        raw.extend(out.lines().map(str::to_string));
     }
+    // --full-name: toplevel-relative like `diff --name-only`, regardless of the -C cwd.
+    if let Ok(out) = git(&["ls-files", "--others", "--exclude-standard", "--full-name"]) {
+        raw.extend(out.lines().map(str::to_string));
+    }
+
+    // Remap toplevel-relative → root-relative (they differ when --root points inside the repo).
+    let root_abs = std::fs::canonicalize(root).map_err(CliError::tool)?;
+    let mut set = HashSet::new();
+    for p in raw.into_iter().filter(|p| !p.is_empty()) {
+        let abs = toplevel.join(&p);
+        if let Ok(rel) = abs.strip_prefix(&root_abs) {
+            set.insert(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    Ok(set)
 }

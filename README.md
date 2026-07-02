@@ -36,12 +36,18 @@ code** (the midian Rust backend + Svelte frontend, and the `midflow` release CLI
 ## How a project consumes it
 
 ```sh
-midas flow ship                   # release/branch flow: start·sync·ship·tag·end·status            — shipped
+midas flow ship                 # release/branch flow: start·rebase·ship·tag·end·status·clean — shipped
 midas check                     # mechanical lint vs the pinned standard; report drift     — shipped
-                                #   (review-tier conventions are delegated to your review agent)
+                                #   (--changed = fast pre-commit pass; review-tier conventions
+                                #    are delegated to your review agent)
 midas drift                     # read-only briefing: what changes for this repo if the standard moves — shipped
                                 #   (pinned→embedded outcome diff: blocking / action / ledger cleanup)
 midas sync                      # refresh the version-stamped agent managed-block in this repo — shipped
+midas explain BE-0010           # one convention, self-served: requirement, tier, escape, doc — shipped
+midas conventions --tier check  # list the embedded catalog (filter by tier/escape/layer)  — shipped
+midas deviate FE-0004 --reason "web-only"  # ledger a deviation without hand-editing TOML  — shipped
+                                #   (--prune drops entries whose conventions now pass)
+midas adopt                     # bring an EXISTING repo under the standard: manifest+docs+check — shipped
 midas touch module billing        # scaffold a conventional piece — state/migration/component/module — shipped
 midas touch project my-app --profile app  # scaffold a conformant project (midas.toml, agent docs, CI)   — shipped
 midas upgrade                   # carry the project to a newer standard version via codemods — deferred

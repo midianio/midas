@@ -1,10 +1,12 @@
-//! `midas flow` — the release/branch lifecycle: start · sync · ship · tag · end · status. Active
-//! state is derived from the current git branch (the paired pscale branch is `pscale_branch_from_git`),
-//! so there is no state file to keep in sync.
+//! `midas flow` — the release/branch lifecycle: start · rebase · ship · tag · end · status · clean.
+//! Active state is derived from the current git branch (the paired pscale branch is
+//! `pscale_branch_from_git`), so there is no state file to keep in sync.
 //!
 //! The daily loop is `start → ship → end`: `start` cuts the branch, `ship` is the opinionated "send
-//! it" (rebase on trunk, push, open-or-update the PR in one shot), and `end` cleans up. `sync` is the
-//! lower-level rebase-only catch-up for mid-work; `ship` already does it as its first step.
+//! it" (rebase on trunk, push, open-or-update the PR in one shot), and `end` cleans up. `rebase` is
+//! the lower-level rebase-only catch-up for mid-work; `ship` already does it as its first step.
+//! `clean` is the janitor: it prunes local feature branches whose PR merged, plus their paired
+//! pscale branches.
 
 use crate::core::exit::{CliError, CliResult};
 use crate::core::{prompt_line, Ctx};
@@ -33,7 +35,8 @@ pub enum FlowCmd {
         no_data: bool,
     },
     /// Rebase the current branch on origin/<trunk> and push (mid-work catch-up).
-    Sync,
+    #[command(alias = "sync")]
+    Rebase,
     /// Send it: rebase on trunk, push, then open or update the PR (the daily "I'm ready" button).
     #[command(visible_alias = "pr")]
     Ship {
@@ -45,6 +48,9 @@ pub enum FlowCmd {
         /// PR body markdown (defaults to the what/why/test-plan template)
         #[arg(long)]
         body: Option<String>,
+        /// Enable auto-merge (squash) on the PR — it merges itself once checks pass.
+        #[arg(long)]
+        auto_merge: bool,
     },
     /// Cut an annotated release tag from the trunk.
     Tag {
@@ -56,11 +62,18 @@ pub enum FlowCmd {
     },
     /// Switch back to the parent branch; optionally delete the paired pscale branch.
     End {
-        #[arg(long)]
-        force: bool,
+        /// Also delete the paired pscale branch (destructive — its data is gone).
+        #[arg(long, alias = "force")]
+        delete_data: bool,
     },
     /// Print the active branch / paired pscale-branch state (--json for scripting).
     Status,
+    /// Prune local feature branches whose PR merged, plus their paired pscale branches.
+    Clean {
+        /// Report what would be deleted without deleting anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 const PR_TEMPLATE: &str = "## What\n- %s\n\n## Why\n-\n\n## Test plan\n- [ ] ran locally\n- [ ] tested on mobile viewport (if UI)\n- [ ] type-check + lint pass\n";
@@ -74,11 +87,17 @@ pub fn run(ctx: &Ctx, manifest: &Manifest, cmd: FlowCmd) -> CliResult {
             with_data,
             no_data,
         } => start(ctx, &cfg, branch_type, slug, with_data, no_data),
-        FlowCmd::Sync => sync(ctx, &cfg),
-        FlowCmd::Ship { draft, title, body } => ship(ctx, &cfg, draft, title, body),
+        FlowCmd::Rebase => rebase(ctx, &cfg),
+        FlowCmd::Ship {
+            draft,
+            title,
+            body,
+            auto_merge,
+        } => ship(ctx, &cfg, draft, title, body, auto_merge),
         FlowCmd::Tag { version, message } => tag(ctx, &cfg, version, message),
-        FlowCmd::End { force } => end(ctx, &cfg, force),
+        FlowCmd::End { delete_data } => end(ctx, &cfg, delete_data),
         FlowCmd::Status => status(ctx, &cfg),
+        FlowCmd::Clean { dry_run } => clean(ctx, &cfg, dry_run),
     }
 }
 
@@ -197,23 +216,23 @@ fn start(
     Ok(())
 }
 
-fn sync(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
+fn rebase(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
     git::ensure_repo()?;
     if !git::is_clean()? {
         return Err(CliError::expected(
-            "worktree is dirty — commit or stash before syncing",
+            "worktree is dirty — commit or stash before rebasing",
         ));
     }
     let branch = git::current_branch()?;
     if branch == cfg.trunk {
         return Err(CliError::usage(format!(
-            "on {} — sync is for feature branches; run `git pull` instead",
+            "on {} — rebase is for feature branches; run `git pull` instead",
             cfg.trunk
         )));
     }
 
     ctx.out
-        .banner(format!("Syncing {branch} with origin/{}", cfg.trunk));
+        .banner(format!("Rebasing {branch} on origin/{}", cfg.trunk));
     ctx.out.step("git fetch origin --prune");
     git::fetch()?;
 
@@ -239,7 +258,7 @@ fn sync(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
         ctx.out.success(format!("pushed {branch}"));
         ctx.out
             .data(&json!({ "rebased": true, "pushed": true }), |_| {
-                "synced".into()
+                "rebased and pushed".into()
             });
         return Ok(());
     }
@@ -247,10 +266,10 @@ fn sync(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
     if ctx.confirm("Rebase clean. Push --force-with-lease?", true)? {
         ctx.out.step("git push --force-with-lease");
         git::push_force_with_lease()?;
-        ctx.out.success(format!("synced {branch}"));
+        ctx.out.success(format!("rebased and pushed {branch}"));
         ctx.out
             .data(&json!({ "rebased": true, "pushed": true }), |_| {
-                "synced".into()
+                "rebased and pushed".into()
             });
     } else {
         ctx.out
@@ -264,7 +283,7 @@ fn sync(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
 }
 
 /// Run `git rebase origin/<trunk>` and turn a conflict into a friendly, recoverable error listing
-/// the conflicted files. Shared by `sync` and `ship`.
+/// the conflicted files. Shared by `rebase` and `ship`.
 fn rebase_onto_trunk(cfg: &FlowConfig) -> CliResult {
     if git::rebase_onto(&cfg.trunk).is_err() {
         let conflicts = git::conflicted_files();
@@ -285,13 +304,15 @@ fn rebase_onto_trunk(cfg: &FlowConfig) -> CliResult {
 
 /// The opinionated daily "send it" button: rebase the feature branch on trunk, push it, then open a
 /// PR (or no-op if one is already open — the push has already updated it). Folds what used to be a
-/// separate `sync` + `pr` into one step; `sync` remains for a rebase-only catch-up.
+/// separate `rebase` + `pr` into one step; `rebase` remains for a rebase-only catch-up. With
+/// `--auto-merge` the PR is armed to squash-merge itself once its checks pass.
 fn ship(
     ctx: &Ctx,
     cfg: &FlowConfig,
     draft: bool,
     title: Option<String>,
     body: Option<String>,
+    auto_merge: bool,
 ) -> CliResult {
     git::ensure_repo()?;
     gh::ensure_installed()?;
@@ -341,8 +362,13 @@ fn ship(
     // 3. Open the PR, or no-op if one is already open.
     if let Some(url) = gh::existing_pr(&branch) {
         ctx.out.success(format!("PR updated: {url}"));
-        ctx.out
-            .data(&json!({ "url": url, "created": false }), |_| url.clone());
+        if auto_merge {
+            arm_auto_merge(ctx, &branch)?;
+        }
+        ctx.out.data(
+            &json!({ "url": url, "created": false, "autoMerge": auto_merge }),
+            |_| url.clone(),
+        );
         return Ok(());
     }
 
@@ -363,10 +389,23 @@ fn ship(
     ));
     let url = gh::create_pr(&title, &body, &cfg.trunk, draft)?;
     ctx.out.success(format!("PR opened: {url}"));
+    if auto_merge {
+        arm_auto_merge(ctx, &branch)?;
+    }
     ctx.out.data(
-        &json!({ "url": url, "created": true, "draft": draft }),
+        &json!({ "url": url, "created": true, "draft": draft, "autoMerge": auto_merge }),
         |_| url.clone(),
     );
+    Ok(())
+}
+
+/// `gh pr merge --auto --squash` on the branch's PR — it merges itself once checks pass.
+fn arm_auto_merge(ctx: &Ctx, branch: &str) -> CliResult {
+    ctx.out
+        .step(format!("gh pr merge {branch} --auto --squash"));
+    gh::enable_auto_merge(branch)?;
+    ctx.out
+        .success("auto-merge armed (squash, once checks pass)");
     Ok(())
 }
 
@@ -463,11 +502,11 @@ fn status(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
     Ok(())
 }
 
-/// Switch back to the parent branch and strip the managed `.env.local` block. With `--force`, also
-/// delete the paired pscale branch derived from the current git branch (if it exists). The branch
-/// name is derived from git, and `pscale::delete_branch` refuses `main`/`dev`/parent, so a stray
-/// `--force` on a non-feature branch can't delete a shared branch.
-fn end(ctx: &Ctx, cfg: &FlowConfig, force: bool) -> CliResult {
+/// Switch back to the parent branch and strip the managed `.env.local` block. With `--delete-data`,
+/// also delete the paired pscale branch derived from the current git branch (if it exists). The
+/// branch name is derived from git, and `pscale::delete_branch` refuses `main`/`dev`/parent, so a
+/// stray `--delete-data` on a non-feature branch can't delete a shared branch.
+fn end(ctx: &Ctx, cfg: &FlowConfig, delete_data: bool) -> CliResult {
     git::ensure_repo()?;
     let git_branch = git::current_branch()?;
     if !is_feature_branch(&git_branch) {
@@ -479,7 +518,7 @@ fn end(ctx: &Ctx, cfg: &FlowConfig, force: bool) -> CliResult {
     ctx.out.step(format!("git checkout {}", cfg.parent));
     git::checkout(&cfg.parent)?;
 
-    if force {
+    if delete_data {
         pscale::ensure_auth()?;
         if pscale::branch_exists(cfg, &pscale_branch) {
             ctx.out
@@ -491,12 +530,87 @@ fn end(ctx: &Ctx, cfg: &FlowConfig, force: bool) -> CliResult {
         }
     } else if pscale::ensure_auth().is_ok() && pscale::branch_exists(cfg, &pscale_branch) {
         ctx.out.info(format!(
-            "leaving pscale branch {pscale_branch} alive — pass --force to delete"
+            "leaving pscale branch {pscale_branch} alive — pass --delete-data to delete"
         ));
     }
 
     env::clear_api_env_local(cfg)?;
     ctx.out.success("done");
+    Ok(())
+}
+
+/// The janitor: delete local feature branches whose work is merged into origin/<trunk>, plus their
+/// paired pscale branches. "Merged" is git's `--merged` *or* a merged PR with that head (squash
+/// merges leave no ancestry, so `--merged` alone misses the common case). The current branch and
+/// trunk/parent are never candidates, and `pscale::delete_branch` refuses shared branches.
+fn clean(ctx: &Ctx, cfg: &FlowConfig, dry_run: bool) -> CliResult {
+    git::ensure_repo()?;
+    gh::ensure_installed()?;
+    gh::ensure_authed()?;
+
+    ctx.out.banner("Cleaning merged feature branches");
+    ctx.out.step("git fetch origin --prune");
+    git::fetch()?;
+
+    let current = git::current_branch()?;
+    let merged_by_git = git::merged_branches(&cfg.trunk);
+    let candidates: Vec<String> = git::local_branches()?
+        .into_iter()
+        .filter(|b| is_feature_branch(b) && *b != current)
+        .filter(|b| merged_by_git.contains(b) || gh::merged_pr_exists(b))
+        .collect();
+
+    if candidates.is_empty() {
+        ctx.out
+            .info("nothing to clean — no merged feature branches");
+        ctx.out
+            .data(&json!({ "deleted": [], "dryRun": dry_run }), |_| {
+                "nothing to clean".into()
+            });
+        return Ok(());
+    }
+
+    for b in &candidates {
+        ctx.out.info(format!("merged: {b}"));
+    }
+    if dry_run {
+        ctx.out
+            .data(&json!({ "deleted": &candidates, "dryRun": true }), |_| {
+                format!("{} branch(es) would be deleted", candidates.len())
+            });
+        return Ok(());
+    }
+    if !ctx.confirm(
+        &format!(
+            "Delete {} merged branch(es) (+ paired pscale branches)?",
+            candidates.len()
+        ),
+        true,
+    )? {
+        return Err(CliError::expected("aborted"));
+    }
+
+    let pscale_ok = pscale::ensure_auth().is_ok();
+    let mut deleted: Vec<String> = Vec::new();
+    for branch in &candidates {
+        // -D, not -d: a squash-merged branch isn't an ancestor of trunk, so -d would refuse.
+        ctx.out.step(format!("git branch -D {branch}"));
+        git::delete_local_branch(branch)?;
+        let paired = pscale_branch_from_git(branch);
+        if pscale_ok && pscale::branch_exists(cfg, &paired) {
+            ctx.out
+                .step(format!("pscale branch delete {} {}", cfg.db, paired));
+            pscale::delete_branch(cfg, &paired)?;
+        }
+        deleted.push(branch.clone());
+    }
+
+    ctx.out
+        .success(format!("cleaned {} branch(es)", deleted.len()));
+    ctx.out
+        .data(&json!({ "deleted": &deleted, "dryRun": false }), |_| {
+            format!("cleaned {}", deleted.join(", "))
+        });
     Ok(())
 }
 

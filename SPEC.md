@@ -131,11 +131,16 @@ CLI standard, [`standards/cli/`](./standards/cli/)).
 
 | Command | Does | Status |
 | --- | --- | --- |
-| `midas flow start·sync·ship·tag·end·status` | The release/branch flow (ported from midflow). | **shipped** |
-| `midas check` | Lint vs the pinned standard — **mechanical only**; review-tier conventions are delegated to an external agent ([§8](#8-enforcement)). The CI gate. | **shipped** |
+| `midas flow start·rebase·ship·tag·end·status·clean` | The release/branch flow (ported from midflow). `ship --auto-merge` arms the PR to squash-merge itself; `clean` prunes local branches whose PR merged (+ their paired pscale branches). | **shipped** |
+| `midas check [--changed]` | Lint vs the pinned standard — **mechanical only**; review-tier conventions are delegated to an external agent ([§8](#8-enforcement)). The CI gate. `--changed` scopes content scans to files changed vs origin/<trunk> — the fast pre-commit pass (CI runs the full scan). | **shipped** |
 | `midas drift [<from>..<to>]` | **Read-only** drift briefing for a model: diff two embedded standard versions *as outcomes against this repo* (default pinned→embedded). Runs `check`'s classifier under each version and reports the transitions — `blocking` / `action_needed` / `ledger_cleanup` — with the `file:line` worklist, plus standing drift. Never gates (exit 0); the plan a future `midas upgrade` executes ([§7](#7-drift--versioning)). | **shipped** |
 | `midas sync` | Materialize the version-stamped managed block into the repo ([§8](#agent-playbook-delivery)). | **shipped** |
-| `midas doctor` | Diagnose the dev environment. | **shipped** |
+| `midas explain <ID>` | Print one convention from the embedded registry — requirement, tier, escape policy, mechanical spec, doc pointer. The other half of `check`: the gate says *that*, `explain` says *why and how*. | **shipped** |
+| `midas conventions [--tier\|--escape\|--layer]` | List the embedded convention catalog — the standard, self-served from the binary. | **shipped** |
+| `midas deviate <ID> --reason … [--prune]` | Ledger a deviation in `midas.toml [deviations]` without hand-editing TOML — refused for `hard` (an entry is itself a check failure) and `advisory` (never blocks) rules. `--prune` drops entries whose conventions now pass (the `ledger_cleanup` worklist `drift` reports). | **shipped** |
+| `midas adopt [--profile <p>]` | Brownfield onboarding: pinned `midas.toml` (if absent) + synced agent docs + the first `check`, offering to ledger standing ledgerable violations for triage. `touch project` is the greenfield door; this is the existing-repo one. | **shipped** |
+| `midas doctor [--fix]` | Diagnose the dev environment; `--fix` remediates the fixable subset (re-syncs a missing/stale agent-docs block). | **shipped** |
+| `midas completions <shell>` | Shell completions to stdout (bash · zsh · fish · elvish · powershell). | **shipped** |
 | `midas touch state\|migration\|component\|module` | Stamp a conventional piece — deterministic bytes (the `add-*` skills promoted to commands). `module` scaffolds the 4-file backend module + wires `pub mod` into `modules/mod.rs`. | **shipped** |
 | `midas touch handler\|pane\|…` | The remaining kinds. | next |
 | `midas touch project <name> --profile <p>` | Scaffold a conformant project: `midas.toml` (version-pinned), agent docs with the synced block, starter CI, dir shape — plus runnable skeletons: `rust-service` (`service`) and `rust-service` + `svelte-app` (`app`). | **shipped** |

@@ -1,6 +1,7 @@
 //! The `midas.toml` lockfile — typed model + loader. See `SPEC.md §7`.
 
 use crate::core::config::{find_up, load_toml};
+use crate::core::GlobalArgs;
 use anyhow::Result;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -112,6 +113,25 @@ pub struct DevProcess {
     /// Working directory relative to the manifest root (defaults to the root).
     #[serde(default)]
     pub cwd: Option<String>,
+}
+
+/// Resolve the project root every project-scoped command shares (one resolution rule, no
+/// per-command drift): the global `--root` if given, else the directory of the nearest `midas.toml`
+/// walking up from the cwd, else the git toplevel, else the cwd itself.
+pub fn resolve_root(global: &GlobalArgs) -> Result<PathBuf> {
+    if let Some(r) = &global.root {
+        return Ok(r.clone());
+    }
+    let cwd = std::env::current_dir()?;
+    if let Some(path) = find_up(&cwd, MANIFEST_NAME) {
+        if let Some(dir) = path.parent() {
+            return Ok(dir.to_path_buf());
+        }
+    }
+    if let Ok(top) = crate::proc::capture("git", &["rev-parse", "--show-toplevel"]) {
+        return Ok(PathBuf::from(top));
+    }
+    Ok(cwd)
 }
 
 impl Manifest {
