@@ -1,6 +1,6 @@
 [package]
 name = "midas"
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
@@ -27,6 +27,7 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 ignore = { workspace = true }
+notify = { workspace = true }
 globset = { workspace = true }
 regex = { workspace = true }
 ctrlc = { workspace = true }

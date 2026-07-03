@@ -14,6 +14,15 @@ path = "src/lib.rs"
 name = "server"
 path = "src/main.rs"
 
+# Fast edit-run loop for `midas dev` (which watch-restarts `cargo run` on change): skip full debug
+# info for this crate (line tables are enough for backtraces) and lightly optimize dependencies once
+# — they rarely recompile, and an -O1 tokio/axum makes the dev server feel real.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 1
+
 [lints.rust]
 unsafe_code = "forbid"
 
