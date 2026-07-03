@@ -36,6 +36,12 @@ pub const RUST_SERVICE: &[TemplateFile] = &[
         "app/api/Cargo.toml",
         include_str!("../../../templates/rust-service/Cargo.toml"),
     ),
+    // Source lives as `cargo-config.toml` (not `.cargo/config.toml`) so the template checkout
+    // itself never picks it up as live cargo config; it lands at the real path when scaffolded.
+    tf(
+        "app/api/.cargo/config.toml",
+        include_str!("../../../templates/rust-service/cargo-config.toml"),
+    ),
     tf(
         "app/api/src/main.rs",
         include_str!("../../../templates/rust-service/src/main.rs"),

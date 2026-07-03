@@ -27,6 +27,7 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 ignore = { workspace = true }
+notify = { workspace = true }
 globset = { workspace = true }
 regex = { workspace = true }
 ctrlc = { workspace = true }

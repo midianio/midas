@@ -149,15 +149,19 @@ fn is_empty_dir(p: &Path) -> bool {
 fn dev_block(profile: Profile) -> String {
     let processes = match profile {
         Profile::App => {
-            "  { name = \"api\", cwd = \"app/api\", cmd = \"cargo run\" },\n  \
+            "  { name = \"api\", cwd = \"app/api\", cmd = \"cargo run\", watch = [\"src\", \"Cargo.toml\"] },\n  \
 { name = \"web\", cwd = \"app/web\", cmd = \"bun run dev\" },\n"
         }
-        Profile::Service => "  { name = \"api\", cwd = \"app/api\", cmd = \"cargo run\" },\n",
+        Profile::Service => {
+            "  { name = \"api\", cwd = \"app/api\", cmd = \"cargo run\", watch = [\"src\", \"Cargo.toml\"] },\n"
+        }
         Profile::Cli | Profile::Library | Profile::Pipeline => return String::new(),
     };
     format!(
         "\n# `midas dev` runs these concurrently (prefixed output, one Ctrl-C tears all down). Set\n\
 # tunnel = true (and configure [flow] pscale_*) to raise a PlanetScale tunnel before they start.\n\
+# `watch` restarts a process when those paths change (for anything that doesn't hot-reload itself,\n\
+# i.e. cargo run — Vite/Bun reload on their own); disable per run with `midas dev --no-watch`.\n\
 [dev]\n\
 tunnel = false\n\
 processes = [\n{processes}]\n"

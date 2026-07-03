@@ -979,3 +979,65 @@ fn flow_rebase_replaces_sync_and_keeps_the_alias() {
         .code(1)
         .stderr(predicate::str::contains("not inside a git repository"));
 }
+
+/// `[dev]` watch: a change to a watched path restarts the process (unix-only — the test drives
+/// the long-running `midas dev` directly and reaps it with a kill).
+#[cfg(unix)]
+#[test]
+fn dev_watch_restarts_process_on_change() {
+    use std::io::Read as _;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "data.txt", "alpha\n");
+    write(
+        dir.path(),
+        "midas.toml",
+        "[standard]\nversion = \"0.3.0\"\n\n[dev]\nprocesses = [\n  { name = \"echoer\", cmd = \"cat data.txt\", watch = [\"data.txt\"] },\n]\n",
+    );
+
+    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("midas"))
+        .arg("dev")
+        .current_dir(dir.path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let out = Arc::new(Mutex::new(String::new()));
+    let reader = {
+        let out = out.clone();
+        let mut stdout = child.stdout.take().unwrap();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 512];
+            while let Ok(n) = stdout.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                out.lock()
+                    .unwrap()
+                    .push_str(&String::from_utf8_lossy(&buf[..n]));
+            }
+        })
+    };
+    let wait_for = |needle: &str| {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            if out.lock().unwrap().contains(needle) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    };
+
+    assert!(wait_for("alpha"), "initial run streams the file");
+    write(dir.path(), "data.txt", "bravo\n");
+    let restarted = wait_for("bravo");
+
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = reader.join();
+    assert!(restarted, "change to a watched path restarts the process");
+}

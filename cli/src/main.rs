@@ -39,6 +39,9 @@ enum Commands {
     Dev {
         /// Run only these named processes (the tunnel always runs); default: all.
         only: Vec<String>,
+        /// Disable the watch-and-restart loop for processes that declare `watch` paths.
+        #[arg(long)]
+        no_watch: bool,
     },
     /// Release / branch flow: start · rebase · ship · tag · end · status · clean.
     Flow {
@@ -148,7 +151,7 @@ fn main() {
     crate::core::log::init(&ctx.global);
 
     let result: CliResult = (|| match cli.command {
-        Commands::Dev { only } => cmd::dev::run(&ctx, only),
+        Commands::Dev { only, no_watch } => cmd::dev::run(&ctx, only, no_watch),
         Commands::Flow { cmd } => {
             let start = manifest::resolve_root(&ctx.global)?;
             let manifest = Manifest::find(&start)?.map(|(m, _)| m).unwrap_or_default();

@@ -1,0 +1,13 @@
+# Cargo config for this service. The biggest lever for the `midas dev` edit-run loop is the linker:
+# linking dominates incremental rebuilds, and a modern parallel linker typically halves them.
+# Uncomment the block for your platform once the linker is installed — both are safe, dev-only wins.
+
+# Linux: mold (https://github.com/rui314/mold — `apt install mold` / `brew install mold`)
+# [target.x86_64-unknown-linux-gnu]
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+# [target.aarch64-unknown-linux-gnu]
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# macOS: lld (ships with `brew install llvm`; Xcode 15+'s default ld-prime is already fast)
+# [target.aarch64-apple-darwin]
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]

@@ -113,6 +113,11 @@ pub struct DevProcess {
     /// Working directory relative to the manifest root (defaults to the root).
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Paths to watch (relative to `cwd`); any change restarts this process, debounced. The
+    /// watch-and-restart loop for processes that don't hot-reload themselves (`cargo run`) —
+    /// Vite/Bun processes don't need it. Disable for a run with `midas dev --no-watch`.
+    #[serde(default)]
+    pub watch: Vec<String>,
 }
 
 /// Resolve the project root every project-scoped command shares (one resolution rule, no

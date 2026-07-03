@@ -3,25 +3,36 @@
 //! the pscale tunnel — using the `[flow]` config + the paired branch for the current git branch —
 //! before the processes start. One Ctrl-C tears the whole group down (each process leads its own
 //! process group, so `cargo run`'s child server is killed too, not orphaned).
+//!
+//! A process with `watch` paths gets the watch-and-restart loop (for anything that doesn't
+//! hot-reload itself, i.e. `cargo run`): any change under those paths kills the process's whole
+//! tree and respawns it, debounced so a save-burst restarts once. A watched process that exits —
+//! e.g. `cargo run` on a compile error — stays down until the next change instead of ending the
+//! session. `--no-watch` disables all watchers for the run.
 
 use crate::core::exit::{CliError, CliResult};
 use crate::core::Ctx;
 use crate::flow::config::{pscale_branch_from_git, FlowConfig};
 use crate::manifest::{DevProcess, Manifest};
+use notify::Watcher;
 use procgroup::Group;
 use std::io::{BufRead, BufReader, IsTerminal};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 /// ANSI fg colors cycled across processes; the tunnel always gets the first (blue).
 const COLORS: &[&str] = &["34", "36", "35", "32", "33", "31"]; // blue cyan magenta green yellow red
 
-pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
+/// Restart no sooner than this after the last change event, so a burst of saves (editor
+/// format-on-save, `git checkout`) restarts once, not once per file.
+const DEBOUNCE: Duration = Duration::from_millis(300);
+
+pub fn run(ctx: &Ctx, only: Vec<String>, no_watch: bool) -> CliResult {
     let start = crate::manifest::resolve_root(&ctx.global).map_err(CliError::tool)?;
     let (manifest, root) = match Manifest::find(&start).map_err(CliError::tool)? {
         Some((m, r)) => (m, r),
@@ -49,10 +60,16 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
                 cfg.db, branch, cfg.org, cfg.port
             ),
             cwd: None,
+            watch: Vec::new(),
         });
         tunnel_port = Some(cfg.port);
     }
     procs.extend(manifest.dev.processes.iter().cloned());
+    if no_watch {
+        for p in &mut procs {
+            p.watch.clear();
+        }
+    }
 
     // Optional positional filter: `midas dev api web` runs only those (the tunnel always runs).
     if !only.is_empty() {
@@ -83,6 +100,12 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
     let mut group = Group::new().map_err(CliError::tool)?;
     let mut children: Vec<(String, Child)> = Vec::new();
     let mut readers: Vec<thread::JoinHandle<()>> = Vec::new();
+    let mut prefixes: Vec<String> = Vec::new();
+
+    // File watchers for `watch`ed processes: every relevant event sends the process index down one
+    // channel; the supervise loop debounces and restarts. Watchers must outlive the loop.
+    let (watch_tx, watch_rx) = mpsc::channel::<usize>();
+    let mut watchers: Vec<notify::RecommendedWatcher> = Vec::new();
 
     for (i, p) in procs.iter().enumerate() {
         let prefix = make_prefix(&p.name, width, COLORS[i % COLORS.len()], color);
@@ -97,7 +120,30 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
             readers.push(pipe(err, prefix.clone(), false));
         }
         ctx.out.info(format!("started {}", p.name));
+        prefixes.push(prefix);
         children.push((p.name.clone(), child));
+
+        if !p.watch.is_empty() {
+            match make_watcher(p, &root, i, watch_tx.clone()) {
+                Ok(Some(w)) => {
+                    ctx.out.step(format!(
+                        "watching {} → restart {}",
+                        p.watch.join(", "),
+                        p.name
+                    ));
+                    watchers.push(w);
+                }
+                Ok(None) => ctx.out.warn(format!(
+                    "{}: no watch path exists ({}) — running without restart",
+                    p.name,
+                    p.watch.join(", ")
+                )),
+                Err(e) => ctx.out.warn(format!(
+                    "{}: watch failed ({e}) — running without restart",
+                    p.name
+                )),
+            }
+        }
 
         // Gate the rest of the processes on the tunnel actually listening, then bring the schema up
         // to date before the app starts (so a fresh/seeded branch has its migrations applied).
@@ -123,13 +169,23 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
         }
     }
 
-    // Supervise: announce each process as it exits (so a crash is visible, not silent); stop when
-    // Ctrl-C is pressed or every process has exited on its own.
+    // Supervise: announce each process as it exits (so a crash is visible, not silent); restart
+    // watched processes on (debounced) file changes. Stop when Ctrl-C is pressed or — with no
+    // watchers armed — every process has exited on its own. With watchers, an all-exited state
+    // just waits for the next change (a compile error shouldn't end the session).
+    let watching = !watchers.is_empty();
     let mut reported = vec![false; children.len()];
+    let mut restart_at: Vec<Option<Instant>> = vec![None; children.len()];
     loop {
         if shutdown.load(Ordering::SeqCst) {
             break;
         }
+
+        // Drain change events into per-process debounce deadlines.
+        while let Ok(idx) = watch_rx.try_recv() {
+            restart_at[idx] = Some(Instant::now() + DEBOUNCE);
+        }
+
         let mut all_done = true;
         for (idx, (name, child)) in children.iter_mut().enumerate() {
             match child.try_wait() {
@@ -145,9 +201,37 @@ pub fn run(ctx: &Ctx, only: Vec<String>) -> CliResult {
                 _ => all_done = false,
             }
         }
-        if all_done {
+        if all_done && !watching {
             break;
         }
+
+        // Fire due restarts.
+        for idx in 0..children.len() {
+            let due = matches!(restart_at[idx], Some(t) if Instant::now() >= t);
+            if !due {
+                continue;
+            }
+            restart_at[idx] = None;
+            let (name, child) = &mut children[idx];
+            ctx.out.step(format!("{name} changed — restarting"));
+            procgroup::kill_tree(child);
+            group.unregister(child.id());
+            match spawn(&procs[idx], &root) {
+                Ok(mut next) => {
+                    group.register(&next);
+                    if let Some(out) = next.stdout.take() {
+                        readers.push(pipe(out, prefixes[idx].clone(), true));
+                    }
+                    if let Some(err) = next.stderr.take() {
+                        readers.push(pipe(err, prefixes[idx].clone(), false));
+                    }
+                    *child = next;
+                    reported[idx] = false;
+                }
+                Err(e) => ctx.out.error(format!("respawn {name}: {e}")),
+            }
+        }
+
         thread::sleep(Duration::from_millis(150));
     }
 
@@ -227,6 +311,46 @@ fn ensure_js_deps(ctx: &Ctx, procs: &[DevProcess], root: &Path) -> CliResult {
         }
     }
     Ok(())
+}
+
+/// Build a recursive watcher over the process's `watch` paths (resolved against its cwd), sending
+/// the process index down `tx` on any mutating event. `Ok(None)` when no configured path exists.
+fn make_watcher(
+    p: &DevProcess,
+    root: &Path,
+    idx: usize,
+    tx: mpsc::Sender<usize>,
+) -> notify::Result<Option<notify::RecommendedWatcher>> {
+    let base: PathBuf = match &p.cwd {
+        Some(c) => root.join(c),
+        None => root.to_path_buf(),
+    };
+    let paths: Vec<PathBuf> = p
+        .watch
+        .iter()
+        .map(|w| base.join(w))
+        .filter(|w| w.exists())
+        .collect();
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if let Ok(event) = res {
+            // Only content-affecting events; Access events would restart on every read.
+            if matches!(
+                event.kind,
+                notify::EventKind::Create(_)
+                    | notify::EventKind::Modify(_)
+                    | notify::EventKind::Remove(_)
+            ) {
+                let _ = tx.send(idx);
+            }
+        }
+    })?;
+    for path in &paths {
+        watcher.watch(path, notify::RecursiveMode::Recursive)?;
+    }
+    Ok(Some(watcher))
 }
 
 fn spawn(p: &DevProcess, root: &Path) -> std::io::Result<Child> {
@@ -311,6 +435,34 @@ fn wait_for_port(port: u16, timeout: Duration, shutdown: &AtomicBool) -> bool {
 mod procgroup {
     use std::process::{Child, Command};
 
+    /// Kill ONE child's whole tree and reap it — the watch-restart path (teardown handles the
+    /// everything-at-once case). Unix: signal its process group with the same TERM → grace → KILL
+    /// ladder as teardown. Windows: children share one Job (can't kill just one through it), so
+    /// `taskkill /T /F` fells this child's tree.
+    pub fn kill_tree(child: &mut Child) {
+        #[cfg(unix)]
+        {
+            let pid = child.id() as i32;
+            unsafe { libc::kill(-pid, libc::SIGTERM) };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while std::time::Instant::now() < deadline {
+                if matches!(child.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            unsafe { libc::kill(-pid, libc::SIGKILL) };
+            let _ = child.wait();
+        }
+        #[cfg(windows)]
+        {
+            let _ = Command::new("taskkill")
+                .args(["/PID", &child.id().to_string(), "/T", "/F"])
+                .output();
+            let _ = child.wait();
+        }
+    }
+
     #[cfg(unix)]
     pub struct Group {
         pids: Vec<i32>,
@@ -331,6 +483,12 @@ mod procgroup {
         /// Record the child's pid (which is also its process-group id).
         pub fn register(&mut self, child: &Child) {
             self.pids.push(child.id() as i32);
+        }
+
+        /// Forget a reaped child's pid so teardown never signals a group id the OS may have
+        /// recycled (the watch-restart path replaces children mid-run).
+        pub fn unregister(&mut self, pid: u32) {
+            self.pids.retain(|&p| p != pid as i32);
         }
 
         /// SIGTERM every group, wait briefly for a clean exit, then SIGKILL any survivors and reap.
@@ -401,6 +559,10 @@ mod procgroup {
 
         /// No pre-spawn setup needed on Windows.
         pub fn prepare(_cmd: &mut Command) {}
+
+        /// No-op on Windows: job membership isn't revocable, and terminating a job that contains
+        /// an already-dead process is harmless.
+        pub fn unregister(&mut self, _pid: u32) {}
 
         /// Assign the child to the job; descendants it spawns inherit the job, so tearing the job
         /// down kills the whole tree. Done right after spawn — before the shell has launched its
