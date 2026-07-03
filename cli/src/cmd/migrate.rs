@@ -22,12 +22,12 @@ pub enum MigrateCmd {
 }
 
 pub fn run(ctx: &Ctx, cmd: MigrateCmd) -> CliResult {
-    let cwd = std::env::current_dir().map_err(CliError::tool)?;
-    let (manifest, root) = match Manifest::find(&cwd).map_err(CliError::tool)? {
+    let start = crate::manifest::resolve_root(&ctx.global).map_err(CliError::tool)?;
+    let (manifest, root) = match Manifest::find(&start).map_err(CliError::tool)? {
         Some((m, r)) => (m, r),
         None => {
             return Err(CliError::usage(
-                "no midas.toml found — run from a midas project",
+                "no midas.toml found — run from a midas project (or pass --root)",
             ))
         }
     };

@@ -59,6 +59,13 @@ impl Scanner {
         self.files.len()
     }
 
+    /// Narrow the scan to `keep` (root-relative, forward-slashed) — `check --changed`. Only the
+    /// content scans (banned-call / banned-file) consult the file list; file-structure and
+    /// managed-block checks probe the filesystem directly and still see the whole tree.
+    pub fn retain(&mut self, keep: &std::collections::HashSet<String>) {
+        self.files.retain(|rel| keep.contains(&rel_slash(rel)));
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }

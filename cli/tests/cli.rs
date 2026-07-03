@@ -673,3 +673,309 @@ fn drift_outcome_diff_blocks_and_cleans_ledger() {
     assert_eq!(v["summary"]["blocking"], 1);
     assert_eq!(v["summary"]["ledger_cleanup"], 1);
 }
+
+// ---- the standards family: explain · conventions · deviate ----
+
+#[test]
+fn explain_known_id_renders_and_json_is_stable() {
+    midas()
+        .args(["explain", "BE-0010"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("BE-0010"))
+        .stdout(predicate::str::contains("hard"));
+
+    let out = midas()
+        .args(["--json", "explain", "BE-0010"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["convention"]["id"], "BE-0010");
+    assert_eq!(v["convention"]["tier"], "check");
+    assert_eq!(v["convention"]["escape"], "hard");
+    assert!(v["version"].as_str().is_some());
+}
+
+#[test]
+fn explain_is_case_insensitive_and_unknown_id_is_usage_error() {
+    midas().args(["explain", "be-0010"]).assert().success();
+    midas()
+        .args(["explain", "XX-9999"])
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("unknown convention id"));
+}
+
+#[test]
+fn conventions_lists_and_filters() {
+    let out = midas().args(["--json", "conventions"]).output().unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let all = v["count"].as_u64().unwrap();
+    assert!(all >= 50, "the whole catalog lists, got {all}");
+
+    let out = midas()
+        .args([
+            "--json",
+            "conventions",
+            "--tier",
+            "check",
+            "--layer",
+            "backend",
+        ])
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        v["count"].as_u64().unwrap() < all,
+        "filters narrow the list"
+    );
+    for c in v["conventions"].as_array().unwrap() {
+        assert_eq!(c["tier"], "check");
+        assert_eq!(c["layer"], "backend");
+    }
+
+    midas()
+        .args(["conventions", "--tier", "bogus"])
+        .assert()
+        .code(3);
+}
+
+#[test]
+fn deviate_writes_ledger_and_refuses_hard_and_advisory() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "midas.toml",
+        "[standard]\nversion = \"0.2.0\"\n",
+    );
+
+    // ledgered-escape rule → entry written, comments/sections preserved.
+    midas()
+        .args([
+            "deviate",
+            "BE-0014",
+            "--reason",
+            "no TS client yet",
+            "--root",
+        ])
+        .arg(dir.path())
+        .assert()
+        .success();
+    let toml = fs::read_to_string(dir.path().join("midas.toml")).unwrap();
+    assert!(toml.contains("[deviations]"));
+    assert!(toml.contains("\"BE-0014\" = \"no TS client yet\""));
+    assert!(toml.starts_with("[standard]"), "existing content preserved");
+
+    // hard → refused (exit 3); advisory → refused (exit 3).
+    midas()
+        .args(["deviate", "BE-0010", "--reason", "x", "--root"])
+        .arg(dir.path())
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("hard"));
+    midas()
+        .args(["deviate", "FE-0002", "--reason", "x", "--root"])
+        .arg(dir.path())
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("advisory"));
+
+    // no midas.toml → usage error pointing at adopt.
+    let bare = tempfile::tempdir().unwrap();
+    midas()
+        .args(["deviate", "BE-0014", "--reason", "x", "--root"])
+        .arg(bare.path())
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("midas adopt"));
+}
+
+#[test]
+fn deviate_prune_drops_dead_entries_and_keeps_live_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    // ZZ-0001 no longer exists in the standard (dead); FE-0004 is review-tier (kept).
+    write(
+        dir.path(),
+        "midas.toml",
+        "[standard]\nversion = \"0.2.0\"\n[deviations]\n\"ZZ-0001\" = \"from an old standard\"\n\"FE-0004\" = \"web-only\"\n",
+    );
+    let out = midas()
+        .args(["--json", "deviate", "--prune", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["pruned"], serde_json::json!(["ZZ-0001"]));
+    assert_eq!(v["kept"], serde_json::json!(["FE-0004"]));
+    let toml = fs::read_to_string(dir.path().join("midas.toml")).unwrap();
+    assert!(!toml.contains("ZZ-0001"));
+    assert!(toml.contains("FE-0004"));
+}
+
+// ---- adopt · doctor --fix · completions · check --changed ----
+
+#[test]
+fn adopt_brownfield_writes_manifest_docs_and_runs_the_gate() {
+    let dir = tempfile::tempdir().unwrap();
+    // An existing repo with a standing hard violation (FE-0010) and no state dir (FE-0001).
+    write(
+        dir.path(),
+        "app/web/src/lib/thing.ts",
+        "export const id = () => crypto.randomUUID();\n",
+    );
+    midas()
+        .args(["adopt", "--profile", "app", "-y", "--root"])
+        .arg(dir.path())
+        .assert()
+        .code(2) // hard violations can't be ledgered — adopt ends on the honest gate
+        .stderr(predicate::str::contains("mechanical violation"));
+
+    let toml = fs::read_to_string(dir.path().join("midas.toml")).unwrap();
+    assert!(toml.contains("[standard]"));
+    assert!(toml.contains("profile = \"app\""));
+    let doc = fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
+    assert!(doc.contains("<!-- midas:"), "agent docs synced");
+
+    // Idempotent: a second adopt keeps the manifest and still just re-checks.
+    midas()
+        .args(["adopt", "--profile", "app", "-y", "--root"])
+        .arg(dir.path())
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn adopt_clean_tree_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("app/web/src/lib/state")).unwrap();
+    write(dir.path(), "app/api/src/main.rs", "fn main() {}\n");
+    midas()
+        .args(["adopt", "--profile", "app", "-y", "--root"])
+        .arg(dir.path())
+        .assert()
+        .success();
+}
+
+#[test]
+fn doctor_fix_repairs_stale_agent_docs() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("CLAUDE.md"),
+        "# P\n\n<!-- midas:0.0.1 -->\nold\n<!-- /midas -->\n",
+    )
+    .unwrap();
+    // Don't assert the exit code — gh/git env checks vary by machine; assert the fix happened.
+    midas()
+        .args(["doctor", "--fix", "--root"])
+        .arg(dir.path())
+        .assert()
+        .stderr(predicate::str::contains("fixed: synced"));
+    let doc = fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
+    assert!(!doc.contains("midas:0.0.1"), "stale block replaced");
+}
+
+#[test]
+fn completions_emit_to_stdout() {
+    midas()
+        .args(["completions", "zsh"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("midas"));
+    midas().args(["completions", "klingon"]).assert().code(2); // clap's invalid-value exit
+}
+
+#[test]
+fn check_changed_scopes_content_scans_to_changed_files() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    git(&["init", "-q", "."]);
+    // Commit a pre-existing violation, then add a fresh untracked one.
+    write(
+        dir.path(),
+        "app/web/src/lib/old-bad.ts",
+        "export const a = () => crypto.randomUUID();\n",
+    );
+    git(&["add", "-A"]);
+    git(&[
+        "-c",
+        "user.email=t@t",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-qm",
+        "init",
+    ]);
+    write(
+        dir.path(),
+        "app/web/src/lib/new-bad.ts",
+        "export const b = () => crypto.randomUUID();\n",
+    );
+
+    let out = midas()
+        .args(["--json", "check", "--changed", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "the new violation still gates");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let fe0010 = v["mechanical"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "FE-0010")
+        .unwrap();
+    let files: Vec<&str> = fe0010["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["file"].as_str().unwrap())
+        .collect();
+    assert!(
+        files.contains(&"app/web/src/lib/new-bad.ts"),
+        "new file scanned"
+    );
+    assert!(
+        !files.contains(&"app/web/src/lib/old-bad.ts"),
+        "committed file skipped in --changed mode"
+    );
+
+    // Outside a git repo, --changed is a usage error.
+    let bare = tempfile::tempdir().unwrap();
+    clean_fixture(bare.path());
+    midas()
+        .args(["check", "--changed", "--root"])
+        .arg(bare.path())
+        .assert()
+        .code(3);
+}
+
+#[test]
+fn flow_rebase_replaces_sync_and_keeps_the_alias() {
+    midas()
+        .args(["flow", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rebase"))
+        .stdout(predicate::str::contains("clean"));
+    // The old spelling still parses (hidden alias) — outside a repo it fails with a typed code,
+    // proving it routed to the rebase command rather than clap rejection (which would be 2).
+    let dir = tempfile::tempdir().unwrap();
+    midas()
+        .args(["flow", "sync"])
+        .current_dir(dir.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("not inside a git repository"));
+}

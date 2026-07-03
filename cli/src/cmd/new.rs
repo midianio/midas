@@ -29,7 +29,7 @@ pub enum Profile {
 }
 
 impl Profile {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Profile::App => "app",
             Profile::Service => "service",
@@ -50,7 +50,7 @@ impl Profile {
     }
 
     /// `[stack]` lines for the manifest — only the layers this profile actually has.
-    fn stack_toml(self) -> String {
+    pub(crate) fn stack_toml(self) -> String {
         match self {
             Profile::App => {
                 "backend = { current = \"rust\" }\nfrontend = { current = \"svelte\" }\n".into()

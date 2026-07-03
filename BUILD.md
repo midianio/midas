@@ -41,7 +41,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 - ✅ `manifest.rs` typed `midas.toml`
 - ✅ `registry.rs` embedded conventions.json model
 - ✅ `flow/` ported midflow → midas flow (git, gh, pscale, env, config)
-- ✅ `cmd/flow.rs` start·sync·ship·tag·end·status
+- ✅ `cmd/flow.rs` start·rebase·ship·tag·end·status·clean (ship --auto-merge)
 - ✅ `cmd/check.rs` mechanical engine (verified vs live midian: clean; vs fixture: catches 3, exit 2)
 - ✅ `checks/` banned-call · file-structure (artifact-hash/provenance/clippy = deferred → Skipped)
 - ✅ `cmd/sync.rs` managed-block writer
@@ -113,7 +113,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 - ✅ docs reconciled: SPEC/README/cli-README match built reality (inverted reviewer, mechanical-only
      gate exit 0/1/2/3, vendor-with-provenance default, upgrade/codemods deferred)
 
-### Surface: flow · touch (project + pieces, templates) · dev · migrate · check · drift · sync · doctor. Both code templates built + verified.
+### Surface: dev · flow · migrate · check (--changed) · drift · sync · explain · conventions · deviate · touch (project + pieces, templates) · adopt · doctor (--fix) · completions. Both code templates built + verified.
 Remaining work needs a decision or touches another repo:
 - **Template depth** — the `rust-service` + `svelte-app` starters are deliberately minimal. Growing
   them (sqlx + offline cache BE-0018, utoipa OpenAPI BE-0014, Clerk auth/billing STK-0005) needs

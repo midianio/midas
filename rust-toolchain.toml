@@ -1,0 +1,6 @@
+# Rustup auto-selects this toolchain for anyone (or any container/CI runner) building the repo,
+# so a machine with an older rustc fails into "downloading 1.95" instead of a build error. Keep in
+# lockstep with `rust-version` in Cargo.toml (the MSRV pin) — bump both together.
+[toolchain]
+channel = "1.95"
+components = ["clippy", "rustfmt"]

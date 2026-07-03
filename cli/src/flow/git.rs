@@ -116,6 +116,36 @@ pub fn push_tag(version: &str) -> Result<()> {
     inherit("git", &["push", "origin", version])
 }
 
+/// All local branch names (short refs).
+pub fn local_branches() -> Result<Vec<String>> {
+    let out = capture(
+        "git",
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+    )?;
+    Ok(out.lines().map(str::to_string).collect())
+}
+
+/// Local branches whose tips are ancestors of origin/<trunk> (misses squash merges — callers pair
+/// this with a merged-PR lookup). Empty on error (e.g. no origin/<trunk> yet).
+pub fn merged_branches(trunk: &str) -> Vec<String> {
+    capture(
+        "git",
+        &[
+            "branch",
+            "--merged",
+            &format!("origin/{trunk}"),
+            "--format=%(refname:short)",
+        ],
+    )
+    .map(|out| out.lines().map(str::to_string).collect())
+    .unwrap_or_default()
+}
+
+/// `git branch -D` — forced, because squash-merged branches are never ancestors of trunk.
+pub fn delete_local_branch(branch: &str) -> Result<()> {
+    inherit("git", &["branch", "-D", branch])
+}
+
 pub fn conflicted_files() -> Vec<String> {
     capture("git", &["diff", "--name-only", "--diff-filter=U"])
         .map(|out| {

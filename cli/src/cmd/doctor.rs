@@ -1,10 +1,13 @@
-//! `midas doctor` — diagnose the local dev environment. Ported from midflow's doctor.
+//! `midas doctor` — diagnose the local dev environment. Ported from midflow's doctor. `--fix`
+//! remediates the fixable subset (today: a missing/stale agent-docs managed block, via `sync`);
+//! everything else keeps printing its hint — doctor never guesses at auth or installs.
 
 use crate::core::exit::{CliError, CliResult};
 use crate::core::Ctx;
 use crate::proc::{capture, on_path, try_capture};
 use serde::Serialize;
 use serde_json::json;
+use std::path::Path;
 
 #[derive(Serialize, Clone, Copy, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -105,9 +108,46 @@ fn check_pscale() -> Check {
     }
 }
 
+/// AGT-0001's local face: the agent docs must carry the current managed block.
+fn check_agent_docs(root: &Path) -> Check {
+    use crate::cmd::sync::{status_of, BlockStatus, TARGETS};
+    use crate::registry::Registry;
+    let version = Registry::embedded()
+        .map(|r| r.version)
+        .unwrap_or_else(|_| "0.0.0".into());
+    let bad: Vec<&str> = TARGETS
+        .iter()
+        .filter(|name| {
+            let existing = std::fs::read_to_string(root.join(name)).ok();
+            status_of(existing.as_deref(), &version) != BlockStatus::Current
+        })
+        .copied()
+        .collect();
+    if bad.is_empty() {
+        ok("agent docs carry the current midas block", version)
+    } else {
+        warn(
+            "agent docs carry the current midas block",
+            format!(
+                "{} missing/stale — run `midas sync` (or `midas doctor --fix`)",
+                bad.join(", ")
+            ),
+        )
+    }
+}
+
 /// `flow_checks` adds the pscale tunnel checks (relevant only to `midas flow`).
-pub fn run(ctx: &Ctx, flow_checks: bool) -> CliResult {
+pub fn run(ctx: &Ctx, flow_checks: bool, fix: bool) -> CliResult {
     ctx.out.banner("midas doctor");
+
+    let root = crate::manifest::resolve_root(&ctx.global)?;
+
+    // The fixable subset first: repair, then diagnose the (now-clean) state.
+    if fix && check_agent_docs(&root).status != Status::Ok {
+        let (version, changed) = crate::cmd::sync::write_blocks(&root)?;
+        ctx.out
+            .success(format!("fixed: synced {} ({version})", changed.join(", ")));
+    }
 
     let mut checks = vec![
         check_bin("git", "install with: brew install git"),
@@ -115,6 +155,7 @@ pub fn run(ctx: &Ctx, flow_checks: bool) -> CliResult {
         check_gh_auth(),
         check_git_identity(),
         check_inside_repo(),
+        check_agent_docs(&root),
     ];
     if flow_checks {
         checks.push(check_pscale());

@@ -52,7 +52,10 @@ These four are enforced **by construction**, not per-command discipline — see 
 Every command is built on the internal `core` kernel (`cli/src/core/`; clap derive + the machinery
 that makes `CLI-0001…0004` structural) rather than re-implementing the contract per command. It owns:
 
-- **Global flags** every command inherits: `--json`, `--yes`, `--quiet`, `--verbose`, `--no-color`.
+- **Global flags** every command inherits: `--json`, `--root`, `--yes`, `--quiet`, `--verbose`,
+  `--no-color`. `--root` is the single project-root override — one resolution rule for every
+  command (explicit `--root` → nearest `midas.toml` walking up → git toplevel → cwd), never
+  re-implemented per command.
 - **An `Output` writer** — `out.data(value)` serializes to stdout as human text *or* `--json` per the
   flag; `out.progress(msg)`/`out.warn(msg)` go to stderr. A command never touches `println!` directly
   (clippy denies `print_stdout`/`print_stderr`, as in the backend).
@@ -72,8 +75,16 @@ the same structural-correctness move as the backend's `response.rs`/`AppError`.
 
 - **Noun-first grouping** for multi-domain tools: `midas flow ship`, `midas touch module`, `midas check`.
   Subcommands are kebab-case; the noun is the area, the verb is the action.
+- **No name may mean two things.** A verb reused across groups must be the *same operation* (or be
+  renamed): `flow rebase` was born `flow sync` and collided with top-level `sync` (agent docs) —
+  a muscle-memory trap. Renames keep the old spelling as a hidden alias for a release.
+- **Flag naming:** `--root` = the project root a command *reads/operates on* (global, one
+  resolver); `--dir` = the destination a scaffold *writes into*. Don't mint new spellings for
+  either. Destructive side effects get named flags (`flow end --delete-data`), never a generic
+  `--force` (reserved for "overwrite what's in the way").
 - `--help` is complete and accurate on every (sub)command — clap derive gives this for free; keep doc
-  comments on every arg.
+  comments on every arg. Declaration order is help order: group by usage rhythm (the daily loop,
+  then the standards family, then setup/tooling), so `--help` teaches the mental model.
 - Prefer explicit args over positional ambiguity for anything an agent generates.
 
 ## Config (`CLI-0006` `[review]`)

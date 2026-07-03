@@ -1,8 +1,11 @@
 pub mod add;
+pub mod adopt;
 pub mod check;
 pub mod dev;
+pub mod deviate;
 pub mod doctor;
 pub mod drift;
+pub mod explain;
 pub mod flow;
 pub mod migrate;
 pub mod new;

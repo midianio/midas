@@ -3,7 +3,7 @@
 //! skew — see `SPEC.md §7`).
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// `registry/conventions.json`, embedded at build time — the *live* standard this binary speaks.
@@ -16,6 +16,7 @@ const EMBEDDED: &str = include_str!("../../registry/conventions.json");
 const HISTORY: &[(&str, &str)] = &[
     ("0.1.0", include_str!("../../registry/history/0.1.0.json")),
     ("0.2.0", include_str!("../../registry/history/0.2.0.json")),
+    ("0.3.0", include_str!("../../registry/history/0.3.0.json")),
 ];
 
 #[derive(Debug, Deserialize)]
@@ -24,7 +25,7 @@ pub struct Registry {
     pub conventions: Vec<Convention>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Convention {
     pub id: String,
     pub title: String,
@@ -43,7 +44,7 @@ pub struct Convention {
     pub doc: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Tier {
     /// Mechanically verifiable → `midas check`.
@@ -52,7 +53,7 @@ pub enum Tier {
     Review,
 }
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Escape {
     /// No deviation allowed.
@@ -64,7 +65,7 @@ pub enum Escape {
 }
 
 /// A mechanical check spec. `kind` is the discriminant.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum CheckSpec {
     /// A regex/substring that must not appear (outside `allow_in`) in files matching `globs`.

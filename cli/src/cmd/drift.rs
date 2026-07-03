@@ -168,20 +168,8 @@ pub fn run(
     spec: Option<String>,
     from_file: Option<PathBuf>,
     to_file: Option<PathBuf>,
-    root_arg: Option<PathBuf>,
 ) -> CliResult {
-    let root = match root_arg {
-        Some(r) => r,
-        None => crate::proc::capture("git", &["rev-parse", "--show-toplevel"])
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
-    };
-    if !root.is_dir() {
-        return Err(CliError::usage(format!(
-            "root {} is not a directory",
-            root.display()
-        )));
-    }
+    let root = crate::manifest::resolve_root(&ctx.global)?;
 
     let (manifest, has_manifest) = match Manifest::find(&root)? {
         Some((m, _)) => (m, true),
