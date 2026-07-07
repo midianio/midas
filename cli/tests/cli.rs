@@ -527,6 +527,74 @@ fn dev_runs_processes_with_prefixed_output() {
 }
 
 #[test]
+fn dev_fails_fast_when_a_declared_port_is_busy() {
+    // Hold a port in-process; `midas dev` must refuse to start (exit 2, the clean "answer is no")
+    // before spawning anything, and name the port + process in the message.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("midas.toml"),
+        format!(
+            "[standard]\nversion = \"0.1.0\"\n[dev]\nprocesses = [\n\
+             {{ name = \"api\", cmd = \"echo should-not-run\", port = {port} }},\n]\n"
+        ),
+    )
+    .unwrap();
+    let out = midas()
+        .args(["--no-color", "dev"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "busy port is an expected failure"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!(":{port} (api)")),
+        "names the busy port and process: {stderr}"
+    );
+    assert!(
+        stderr.contains("--kill-ports"),
+        "points at the reclaim flag: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("should-not-run"),
+        "no process spawns when preflight fails: {stdout}"
+    );
+}
+
+#[test]
+fn dev_with_free_declared_port_runs_normally() {
+    // Bind-then-drop to get a port that is actually free right now.
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("midas.toml"),
+        format!(
+            "[standard]\nversion = \"0.1.0\"\n[dev]\nprocesses = [\n\
+             {{ name = \"api\", cmd = \"echo hi-from-api\", port = {port} }},\n]\n"
+        ),
+    )
+    .unwrap();
+    let out = midas()
+        .args(["--no-color", "dev"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "free declared port doesn't block");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("api │ hi-from-api"), "{stdout}");
+}
+
+#[test]
 fn dev_without_config_is_usage_error() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(

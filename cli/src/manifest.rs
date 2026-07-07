@@ -118,6 +118,11 @@ pub struct DevProcess {
     /// Vite/Bun processes don't need it. Disable for a run with `midas dev --no-watch`.
     #[serde(default)]
     pub watch: Vec<String>,
+    /// The port this process listens on. Declared ports are preflighted before anything spawns:
+    /// a busy port fails the run fast (naming the holder) instead of a mid-startup bind panic or
+    /// a dev server silently drifting to another port. `midas dev --kill-ports` reclaims them.
+    #[serde(default)]
+    pub port: Option<u16>,
 }
 
 /// Resolve the project root every project-scoped command shares (one resolution rule, no

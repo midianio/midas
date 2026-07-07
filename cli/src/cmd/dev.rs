@@ -9,6 +9,11 @@
 //! tree and respawns it, debounced so a save-burst restarts once. A watched process that exits —
 //! e.g. `cargo run` on a compile error — stays down until the next change instead of ending the
 //! session. `--no-watch` disables all watchers for the run.
+//!
+//! Declared `port`s (and the tunnel's) are preflighted before anything spawns: a stale listener
+//! would otherwise surface as a mid-startup `AddrInUse` panic, or worse, a dev server silently
+//! hopping to another port while everything configured against the real one breaks. A busy port
+//! fails the run naming its holder; `--kill-ports` kills the holders and proceeds.
 
 use crate::core::exit::{CliError, CliResult};
 use crate::core::Ctx;
@@ -32,7 +37,7 @@ const COLORS: &[&str] = &["34", "36", "35", "32", "33", "31"]; // blue cyan mage
 /// format-on-save, `git checkout`) restarts once, not once per file.
 const DEBOUNCE: Duration = Duration::from_millis(300);
 
-pub fn run(ctx: &Ctx, only: Vec<String>, no_watch: bool) -> CliResult {
+pub fn run(ctx: &Ctx, only: Vec<String>, no_watch: bool, kill_ports: bool) -> CliResult {
     let start = crate::manifest::resolve_root(&ctx.global).map_err(CliError::tool)?;
     let (manifest, root) = match Manifest::find(&start).map_err(CliError::tool)? {
         Some((m, r)) => (m, r),
@@ -61,6 +66,7 @@ pub fn run(ctx: &Ctx, only: Vec<String>, no_watch: bool) -> CliResult {
             ),
             cwd: None,
             watch: Vec::new(),
+            port: Some(cfg.port),
         });
         tunnel_port = Some(cfg.port);
     }
@@ -80,6 +86,10 @@ pub fn run(ctx: &Ctx, only: Vec<String>, no_watch: bool) -> CliResult {
             "no [dev] processes configured in midas.toml (add a [dev] section with `processes`)",
         ));
     }
+
+    // Preflight: every declared port must be free before anything spawns — fail (or, with
+    // --kill-ports, reclaim) while nothing has started yet.
+    ensure_ports_free(ctx, &procs, kill_ports)?;
 
     // Preflight: a JS process whose deps aren't installed dies with `vite: command not found` (127).
     // Install them once, up front, so `midas dev` works straight after `midas touch project`.
@@ -313,6 +323,79 @@ fn ensure_js_deps(ctx: &Ctx, procs: &[DevProcess], root: &Path) -> CliResult {
     Ok(())
 }
 
+/// Fail fast when a declared `port` (or the tunnel's) already has a listener — checked before
+/// anything spawns, installs, or migrates. The alternative failure modes are strictly worse: the
+/// api panics with `AddrInUse` mid-startup, and Vite silently hops to a free port while everything
+/// configured against the declared one (ORIGIN, callback URLs) keeps pointing at the stale
+/// listener. With `kill`, the holders get the TERM → grace → KILL ladder and the run proceeds
+/// once each port frees up.
+fn ensure_ports_free(ctx: &Ctx, procs: &[DevProcess], kill: bool) -> CliResult {
+    /// One busy port's holders as `(pid, command)`; command may be empty when unresolvable.
+    type Holders = Vec<(u32, String)>;
+    let mut busy: Vec<(&str, u16, Holders)> = Vec::new();
+    for p in procs {
+        let Some(port) = p.port else { continue };
+        if ports::listening(port) {
+            busy.push((&p.name, port, ports::holders(port)));
+        }
+    }
+    if busy.is_empty() {
+        return Ok(());
+    }
+
+    if !kill {
+        let mut msg = String::from("dev ports already in use:\n");
+        for (name, port, holders) in &busy {
+            msg.push_str(&format!("  :{port} ({name}) — {}\n", describe(holders)));
+        }
+        msg.push_str("stop them, or rerun with `midas dev --kill-ports` to take the ports");
+        return Err(CliError::expected(msg));
+    }
+
+    for (name, port, holders) in &busy {
+        if holders.is_empty() {
+            return Err(CliError::tool(anyhow::anyhow!(
+                ":{port} ({name}) is in use but its holder could not be identified — free it by hand"
+            )));
+        }
+        for (pid, cmd) in holders {
+            let what = if cmd.is_empty() {
+                format!("pid {pid}")
+            } else {
+                format!("{cmd} (pid {pid})")
+            };
+            ctx.out
+                .step(format!("freeing :{port} ({name}) — killing {what}"));
+            ports::kill(*pid);
+        }
+        if !ports::wait_free(*port, Duration::from_secs(5)) {
+            return Err(CliError::tool(anyhow::anyhow!(
+                ":{port} ({name}) is still in use after killing its holder — free it by hand"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Render a port's holders for humans: `vite (pid 3941), node (pid 3999)` — or `holder unknown`
+/// when the platform lookup came back empty (no lsof, or a process owned by another user).
+fn describe(holders: &[(u32, String)]) -> String {
+    if holders.is_empty() {
+        return "holder unknown".into();
+    }
+    holders
+        .iter()
+        .map(|(pid, cmd)| {
+            if cmd.is_empty() {
+                format!("pid {pid}")
+            } else {
+                format!("{cmd} (pid {pid})")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Build a recursive watcher over the process's `watch` paths (resolved against its cwd), sending
 /// the process index down `tx` on any mutating event. `Ok(None)` when no configured path exists.
 fn make_watcher(
@@ -426,6 +509,183 @@ fn wait_for_port(port: u16, timeout: Duration, shutdown: &AtomicBool) -> bool {
         thread::sleep(Duration::from_millis(200));
     }
     false
+}
+
+/// Per-platform "who is on this TCP port". `listening` is the cheap universal probe (a loopback
+/// TCP connect, like `wait_for_port`); `holders` resolves the pids so the failure can name the
+/// culprit. Lookup: macOS/BSD ship `lsof`; Linux reads `/proc` directly (lsof isn't always
+/// installed) with `lsof` as fallback; Windows parses `netstat -ano` (always present).
+mod ports {
+    use std::net::TcpStream;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    /// True when something accepts on the port — probed on both loopback families, since a
+    /// listener bound only to `::1`/dual-stack still collides with a server binding v4.
+    pub fn listening(port: u16) -> bool {
+        TcpStream::connect(("127.0.0.1", port)).is_ok() || TcpStream::connect(("::1", port)).is_ok()
+    }
+
+    /// Poll until nothing accepts on the port anymore (or timeout).
+    pub fn wait_free(port: u16, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if !listening(port) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        false
+    }
+
+    /// `(pid, command)` pairs listening on the port; `command` may be empty when unresolvable,
+    /// and the whole list empty when the platform lookup fails (holder owned by another user, no
+    /// tool available) — callers must treat empty as "busy, holder unknown", not "free".
+    #[cfg(all(unix, not(target_os = "linux")))]
+    pub fn holders(port: u16) -> Vec<(u32, String)> {
+        lsof_holders(port)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn holders(port: u16) -> Vec<(u32, String)> {
+        let res = proc_holders(port);
+        if !res.is_empty() {
+            return res;
+        }
+        lsof_holders(port)
+    }
+
+    /// `lsof -Fpc` → machine-readable output: a `p<pid>` line then a `c<command>` line per process.
+    #[cfg(unix)]
+    fn lsof_holders(port: u16) -> Vec<(u32, String)> {
+        let Ok(out) = Command::new("lsof")
+            .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-Fpc"])
+            .output()
+        else {
+            return Vec::new();
+        };
+        let mut res: Vec<(u32, String)> = Vec::new();
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if let Some(pid) = line.strip_prefix('p') {
+                if let Ok(pid) = pid.parse::<u32>() {
+                    if !res.iter().any(|(p, _)| *p == pid) {
+                        res.push((pid, String::new()));
+                    }
+                }
+            } else if let Some(cmd) = line.strip_prefix('c') {
+                if let Some(last) = res.last_mut() {
+                    if last.1.is_empty() {
+                        last.1 = cmd.to_string();
+                    }
+                }
+            }
+        }
+        res
+    }
+
+    /// No external tool on Linux: `/proc/net/tcp{,6}` maps the listening port to socket inodes,
+    /// then each same-user `/proc/<pid>/fd` is scanned for those `socket:[inode]` links.
+    #[cfg(target_os = "linux")]
+    fn proc_holders(port: u16) -> Vec<(u32, String)> {
+        let mut inodes: Vec<String> = Vec::new();
+        for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
+            let Ok(text) = std::fs::read_to_string(table) else {
+                continue;
+            };
+            for line in text.lines().skip(1) {
+                // `sl local_address rem_address st … inode …`; st 0A = LISTEN, port is hex.
+                let cols: Vec<&str> = line.split_whitespace().collect();
+                if cols.len() < 10 || cols[3] != "0A" {
+                    continue;
+                }
+                let Some((_, hex_port)) = cols[1].rsplit_once(':') else {
+                    continue;
+                };
+                if u16::from_str_radix(hex_port, 16) == Ok(port) {
+                    inodes.push(cols[9].to_string());
+                }
+            }
+        }
+        if inodes.is_empty() {
+            return Vec::new();
+        }
+
+        let mut res: Vec<(u32, String)> = Vec::new();
+        let Ok(proc_dir) = std::fs::read_dir("/proc") else {
+            return res;
+        };
+        for entry in proc_dir.flatten() {
+            let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+                continue;
+            };
+            let Ok(fds) = std::fs::read_dir(entry.path().join("fd")) else {
+                continue; // not ours to inspect
+            };
+            let holds = fds.flatten().any(|fd| {
+                std::fs::read_link(fd.path()).is_ok_and(|t| {
+                    let t = t.to_string_lossy();
+                    inodes.iter().any(|i| t == format!("socket:[{i}]"))
+                })
+            });
+            if holds {
+                let cmd = std::fs::read_to_string(entry.path().join("comm"))
+                    .map(|c| c.trim().to_string())
+                    .unwrap_or_default();
+                res.push((pid, cmd));
+            }
+        }
+        res
+    }
+
+    #[cfg(windows)]
+    pub fn holders(port: u16) -> Vec<(u32, String)> {
+        // `netstat -ano -p TCP` lines: `TCP 0.0.0.0:8080 0.0.0.0:0 LISTENING 1234` (the local
+        // address may also be `[::]:8080`). No command name without another lookup; pid suffices.
+        let Ok(out) = Command::new("netstat").args(["-ano", "-p", "TCP"]).output() else {
+            return Vec::new();
+        };
+        let suffix = format!(":{port}");
+        let mut res: Vec<(u32, String)> = Vec::new();
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.len() >= 5
+                && cols[0] == "TCP"
+                && cols[1].ends_with(&suffix)
+                && cols[3] == "LISTENING"
+            {
+                if let Ok(pid) = cols[4].parse::<u32>() {
+                    if !res.iter().any(|(p, _)| *p == pid) {
+                        res.push((pid, String::new()));
+                    }
+                }
+            }
+        }
+        res
+    }
+
+    /// Kill one foreign pid (not a process group we own): TERM, a grace window, then KILL — the
+    /// stale holder is usually a dev server that shuts down cleanly on TERM. Windows has no TERM
+    /// equivalent a console server honors, so `taskkill /T /F` fells the holder's tree outright.
+    #[cfg(unix)]
+    pub fn kill(pid: u32) {
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            // Signal 0 probes liveness: an error (ESRCH) means the process is gone.
+            if unsafe { libc::kill(pid as i32, 0) } != 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    }
+
+    #[cfg(windows)]
+    pub fn kill(pid: u32) {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output();
+    }
 }
 
 /// Per-platform teardown of each child and its descendants. On Unix every child leads its own

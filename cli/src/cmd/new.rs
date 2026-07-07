@@ -149,11 +149,11 @@ fn is_empty_dir(p: &Path) -> bool {
 fn dev_block(profile: Profile) -> String {
     let processes = match profile {
         Profile::App => {
-            "  { name = \"api\", cwd = \"app/api\", cmd = \"cargo run\", watch = [\"src\", \"Cargo.toml\"] },\n  \
-{ name = \"web\", cwd = \"app/web\", cmd = \"bun run dev\" },\n"
+            "  { name = \"api\", cwd = \"app/api\", cmd = \"cargo run\", watch = [\"src\", \"Cargo.toml\"], port = 8080 },\n  \
+{ name = \"web\", cwd = \"app/web\", cmd = \"bun run dev\", port = 5173 },\n"
         }
         Profile::Service => {
-            "  { name = \"api\", cwd = \"app/api\", cmd = \"cargo run\", watch = [\"src\", \"Cargo.toml\"] },\n"
+            "  { name = \"api\", cwd = \"app/api\", cmd = \"cargo run\", watch = [\"src\", \"Cargo.toml\"], port = 8080 },\n"
         }
         Profile::Cli | Profile::Library | Profile::Pipeline => return String::new(),
     };
@@ -162,6 +162,8 @@ fn dev_block(profile: Profile) -> String {
 # tunnel = true (and configure [flow] pscale_*) to raise a PlanetScale tunnel before they start.\n\
 # `watch` restarts a process when those paths change (for anything that doesn't hot-reload itself,\n\
 # i.e. cargo run — Vite/Bun reload on their own); disable per run with `midas dev --no-watch`.\n\
+# `port` is what the process listens on: a stale listener fails the run up front, naming its\n\
+# holder, instead of a mid-startup bind panic (`midas dev --kill-ports` reclaims the ports).\n\
 [dev]\n\
 tunnel = false\n\
 processes = [\n{processes}]\n"
