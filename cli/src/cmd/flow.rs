@@ -471,8 +471,7 @@ fn tag(ctx: &Ctx, cfg: &FlowConfig, version: Option<String>, message: Option<Str
         None => prompt_line(&ctx.out, &ctx.global, "Tag message", Some(&default_msg))?,
     };
 
-    let heal_note = if midas_repo
-        && (git::tag_exists(&version) || git::remote_tag_exists(&version))
+    let heal_note = if midas_repo && (git::tag_exists(&version) || git::remote_tag_exists(&version))
     {
         " (replacing a broken tag)"
     } else {
@@ -531,7 +530,8 @@ fn heal_release_state(ctx: &Ctx, root: &Path, version: &str, target: &str) -> Cl
         let paths = release::bump(root, target, &ctx.out)?;
         if !paths.is_empty() {
             let msg = format!("chore(release): bump versions to {version}");
-            ctx.out.step(format!("git commit (release bump to {target})"));
+            ctx.out
+                .step(format!("git commit (release bump to {target})"));
             git::commit_paths(&msg, &paths).map_err(CliError::tool)?;
         }
     }

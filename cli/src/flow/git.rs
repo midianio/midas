@@ -118,14 +118,21 @@ pub fn push_tag(version: &str) -> Result<()> {
 
 /// True when `refs/tags/<tag>` exists locally.
 pub fn tag_exists(tag: &str) -> bool {
-    capture("git", &["rev-parse", "--verify", &format!("refs/tags/{tag}")]).is_ok()
+    capture(
+        "git",
+        &["rev-parse", "--verify", &format!("refs/tags/{tag}")],
+    )
+    .is_ok()
 }
 
 /// True when `origin` has `refs/tags/<tag>`.
 pub fn remote_tag_exists(tag: &str) -> bool {
-    capture("git", &["ls-remote", "--tags", "origin", &format!("refs/tags/{tag}")])
-        .map(|out| !out.trim().is_empty())
-        .unwrap_or(false)
+    capture(
+        "git",
+        &["ls-remote", "--tags", "origin", &format!("refs/tags/{tag}")],
+    )
+    .map(|out| !out.trim().is_empty())
+    .unwrap_or(false)
 }
 
 pub fn delete_local_tag(tag: &str) -> Result<()> {
@@ -142,7 +149,10 @@ pub fn commit_paths(message: &str, paths: &[std::path::PathBuf]) -> Result<()> {
     if paths.is_empty() {
         bail!("nothing to commit");
     }
-    let path_strs: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    let path_strs: Vec<String> = paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
     let mut args = vec!["add"];
     for p in &path_strs {
         args.push(p.as_str());

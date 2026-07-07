@@ -32,10 +32,7 @@ impl ReleaseState {
             parts.push(format!("cli/Cargo.toml is {}", self.cargo));
         }
         if self.registry != target {
-            parts.push(format!(
-                "registry/conventions.json is {}",
-                self.registry
-            ));
+            parts.push(format!("registry/conventions.json is {}", self.registry));
         }
         if self.midas_toml != target {
             parts.push(format!("midas.toml [standard] is {}", self.midas_toml));
@@ -118,9 +115,8 @@ pub fn semver_from_tag(tag: &str) -> &str {
 
 fn read_cargo_version(path: &Path) -> Result<String, CliError> {
     let raw = std::fs::read_to_string(path).map_err(CliError::tool)?;
-    parse_cargo_version(&raw).ok_or_else(|| {
-        CliError::expected(format!("no version in {}", path.display()))
-    })
+    parse_cargo_version(&raw)
+        .ok_or_else(|| CliError::expected(format!("no version in {}", path.display())))
 }
 
 fn parse_cargo_version(raw: &str) -> Option<String> {
@@ -131,27 +127,21 @@ fn parse_cargo_version(raw: &str) -> Option<String> {
 fn write_cargo_version(path: &Path, version: &str) -> Result<(), CliError> {
     let raw = std::fs::read_to_string(path).map_err(CliError::tool)?;
     let re = Regex::new(r#"(?m)^(version\s*=\s*)"[^"]+""#).unwrap();
-    let next = re
-        .replace(&raw, format!(r#"$1"{version}""#))
-        .into_owned();
+    let next = re.replace(&raw, format!(r#"$1"{version}""#)).into_owned();
     std::fs::write(path, next).map_err(CliError::tool)
 }
 
 fn write_registry_version(path: &Path, version: &str) -> Result<(), CliError> {
     let raw = std::fs::read_to_string(path).map_err(CliError::tool)?;
     let re = Regex::new(r#"(?m)^(\s*"version":\s*)"[^"]+""#).unwrap();
-    let next = re
-        .replace(&raw, format!(r#"$1"{version}""#))
-        .into_owned();
+    let next = re.replace(&raw, format!(r#"$1"{version}""#)).into_owned();
     std::fs::write(path, next).map_err(CliError::tool)
 }
 
 fn write_midas_toml_version(path: &Path, version: &str) -> Result<(), CliError> {
     let raw = std::fs::read_to_string(path).map_err(CliError::tool)?;
     let re = Regex::new(r#"(?m)^(\s*version\s*=\s*)"[^"]+""#).unwrap();
-    let next = re
-        .replace(&raw, format!(r#"$1"{version}""#))
-        .into_owned();
+    let next = re.replace(&raw, format!(r#"$1"{version}""#)).into_owned();
     std::fs::write(path, next).map_err(CliError::tool)
 }
 
@@ -163,9 +153,8 @@ fn write_history_entry(path: &Path, version: &str) -> Result<(), CliError> {
         return Ok(());
     }
 
-    let entry = format!(
-        "    (\"{version}\", include_str!(\"../../registry/history/{version}.json\")),\n"
-    );
+    let entry =
+        format!("    (\"{version}\", include_str!(\"../../registry/history/{version}.json\")),\n");
     let re = Regex::new(r"(const HISTORY: &\[.*?\] = &\[)([\s\S]*?)(\];)").unwrap();
     let Some(caps) = re.captures(&raw) else {
         return Err(CliError::expected(format!(
