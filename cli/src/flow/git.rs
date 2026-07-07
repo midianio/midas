@@ -116,6 +116,41 @@ pub fn push_tag(version: &str) -> Result<()> {
     inherit("git", &["push", "origin", version])
 }
 
+/// True when `refs/tags/<tag>` exists locally.
+pub fn tag_exists(tag: &str) -> bool {
+    capture("git", &["rev-parse", "--verify", &format!("refs/tags/{tag}")]).is_ok()
+}
+
+/// True when `origin` has `refs/tags/<tag>`.
+pub fn remote_tag_exists(tag: &str) -> bool {
+    capture("git", &["ls-remote", "--tags", "origin", &format!("refs/tags/{tag}")])
+        .map(|out| !out.trim().is_empty())
+        .unwrap_or(false)
+}
+
+pub fn delete_local_tag(tag: &str) -> Result<()> {
+    inherit("git", &["tag", "-d", tag])
+}
+
+/// Delete a tag on `origin` (self-heal a broken release tag before re-pushing).
+pub fn delete_remote_tag(tag: &str) -> Result<()> {
+    inherit("git", &["push", "origin", &format!(":refs/tags/{tag}")])
+}
+
+/// Stage explicit paths and commit. Refuses when there is nothing to commit.
+pub fn commit_paths(message: &str, paths: &[std::path::PathBuf]) -> Result<()> {
+    if paths.is_empty() {
+        bail!("nothing to commit");
+    }
+    let path_strs: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    let mut args = vec!["add"];
+    for p in &path_strs {
+        args.push(p.as_str());
+    }
+    inherit("git", &args)?;
+    inherit("git", &["commit", "-m", message])
+}
+
 /// All local branch names (short refs).
 pub fn local_branches() -> Result<Vec<String>> {
     let out = capture(

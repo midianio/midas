@@ -14,10 +14,11 @@ use crate::flow::config::{
     pscale_branch_from_git, seed_by_default, slugify, valid_branch_type, validate_slug,
     BRANCH_TYPES,
 };
-use crate::flow::{env, gh, git, pscale, FlowConfig};
+use crate::flow::{env, gh, git, pscale, release, FlowConfig};
 use crate::manifest::Manifest;
 use clap::Subcommand;
 use serde_json::json;
+use std::path::Path;
 
 #[derive(Subcommand)]
 pub enum FlowCmd {
@@ -418,9 +419,28 @@ fn tag(ctx: &Ctx, cfg: &FlowConfig, version: Option<String>, message: Option<Str
             cfg.trunk
         )));
     }
-    if !git::is_clean()? {
+
+    let version = match version {
+        Some(v) => v,
+        None => prompt_line(&ctx.out, &ctx.global, "Version (e.g. v0.4.0)", None)?,
+    };
+    validate_version(&version)?;
+
+    let root = git::repo_root().map_err(CliError::tool)?;
+    let target = release::semver_from_tag(&version).to_string();
+    let midas_repo = release::is_midas_repo(&root);
+
+    if midas_repo {
+        heal_release_state(ctx, &root, &version, &target)?;
+    } else if !git::is_clean()? {
         return Err(CliError::expected(
             "worktree is dirty — release tags must be from a clean trunk",
+        ));
+    }
+
+    if !git::is_clean()? {
+        return Err(CliError::expected(
+            "worktree is dirty — commit or stash before tagging",
         ));
     }
 
@@ -432,11 +452,18 @@ fn tag(ctx: &Ctx, cfg: &FlowConfig, version: Option<String>, message: Option<Str
         ctx.out.info(format!("latest tag: {latest}"));
     }
 
-    let version = match version {
-        Some(v) => v,
-        None => prompt_line(&ctx.out, &ctx.global, "Version (e.g. v0.4.0)", None)?,
-    };
-    validate_version(&version)?;
+    if midas_repo {
+        let state = release::read_state(&root)?;
+        if !state.matches(&target) {
+            return Err(CliError::expected(format!(
+                "versions still out of sync for {version} — {}",
+                state.drift_summary(&target)
+            )));
+        }
+        ctx.out.info(format!(
+            "lockstep versions at {target} (cli, registry, midas.toml)"
+        ));
+    }
 
     let default_msg = format!("release {version}");
     let message = match message {
@@ -444,9 +471,24 @@ fn tag(ctx: &Ctx, cfg: &FlowConfig, version: Option<String>, message: Option<Str
         None => prompt_line(&ctx.out, &ctx.global, "Tag message", Some(&default_msg))?,
     };
 
-    if !ctx.confirm(&format!("Create tag {version} and push to origin?"), true)? {
+    let heal_note = if midas_repo
+        && (git::tag_exists(&version) || git::remote_tag_exists(&version))
+    {
+        " (replacing a broken tag)"
+    } else {
+        ""
+    };
+    if !ctx.confirm(
+        &format!("Create tag {version} and push to origin?{heal_note}"),
+        true,
+    )? {
         ctx.out.info("aborted");
         return Err(CliError::expected("aborted"));
+    }
+
+    if git::tag_exists(&version) {
+        ctx.out.step(format!("git tag -d {version}"));
+        git::delete_local_tag(&version).map_err(CliError::tool)?;
     }
 
     ctx.out.step(format!("git tag -a {version} -m {message:?}"));
@@ -456,6 +498,55 @@ fn tag(ctx: &Ctx, cfg: &FlowConfig, version: Option<String>, message: Option<Str
     ctx.out.success(format!("tagged and pushed {version}"));
     ctx.out
         .data(&json!({ "version": version }), |_| version.clone());
+    Ok(())
+}
+
+/// Self-heal a midas release: bump lockstep versions when they lag the tag, commit, and remove a
+/// broken local/remote tag so `cargo-dist` can succeed on re-push.
+fn heal_release_state(ctx: &Ctx, root: &Path, version: &str, target: &str) -> CliResult {
+    let state = release::read_state(root)?;
+    let version_mismatch = !state.matches(target);
+    let local_tag = git::tag_exists(version);
+    let remote_tag = git::remote_tag_exists(version);
+
+    if !version_mismatch && !local_tag && !remote_tag {
+        if !git::is_clean()? {
+            return Err(CliError::expected(
+                "worktree is dirty — commit or stash before tagging",
+            ));
+        }
+        return Ok(());
+    }
+
+    if !git::is_clean()? {
+        return Err(CliError::expected(
+            "worktree is dirty — commit or stash before release heal/tag",
+        ));
+    }
+
+    if version_mismatch {
+        ctx.out.info(format!(
+            "self-healing: bumping lockstep versions to {target} for {version}"
+        ));
+        let paths = release::bump(root, target, &ctx.out)?;
+        if !paths.is_empty() {
+            let msg = format!("chore(release): bump versions to {version}");
+            ctx.out.step(format!("git commit (release bump to {target})"));
+            git::commit_paths(&msg, &paths).map_err(CliError::tool)?;
+        }
+    }
+
+    if local_tag {
+        ctx.out.step(format!("git tag -d {version} (broken tag)"));
+        git::delete_local_tag(version).map_err(CliError::tool)?;
+    }
+    if remote_tag {
+        ctx.out.step(format!(
+            "git push origin :refs/tags/{version} (broken remote tag)"
+        ));
+        git::delete_remote_tag(version).map_err(CliError::tool)?;
+    }
+
     Ok(())
 }
 

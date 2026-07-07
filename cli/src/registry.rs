@@ -18,6 +18,7 @@ const HISTORY: &[(&str, &str)] = &[
     ("0.2.0", include_str!("../../registry/history/0.2.0.json")),
     ("0.3.0", include_str!("../../registry/history/0.3.0.json")),
     ("0.4.0", include_str!("../../registry/history/0.4.0.json")),
+    ("0.4.1", include_str!("../../registry/history/0.4.1.json")),
 ];
 
 #[derive(Debug, Deserialize)]

@@ -7,5 +7,6 @@ pub mod gh;
 pub mod git;
 pub mod migrate;
 pub mod pscale;
+pub mod release;
 
 pub use config::FlowConfig;

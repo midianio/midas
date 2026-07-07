@@ -32,7 +32,16 @@ pub(crate) fn write_blocks(root: &std::path::Path) -> Result<(String, Vec<String
     let version = Registry::embedded()
         .map(|r| r.version)
         .unwrap_or_else(|_| "0.0.0".into());
-    let block = managed_block(&version);
+    write_blocks_at_version(root, &version)
+}
+
+/// Like [`write_blocks`], but stamps agent docs with an explicit version (used by the release
+/// bump before the binary is rebuilt with the new embedded registry).
+pub(crate) fn write_blocks_at_version(
+    root: &std::path::Path,
+    version: &str,
+) -> Result<(String, Vec<String>), CliError> {
+    let block = managed_block(version);
     let mut changed: Vec<String> = Vec::new();
     for name in TARGETS {
         let path = root.join(name);
@@ -42,7 +51,7 @@ pub(crate) fn write_blocks(root: &std::path::Path) -> Result<(String, Vec<String
             changed.push(name.to_string());
         }
     }
-    Ok((version, changed))
+    Ok((version.to_string(), changed))
 }
 
 pub fn run(ctx: &Ctx, check_only: bool) -> CliResult {
