@@ -18,5 +18,6 @@ targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-da
 install-path = "CARGO_HOME"
 # Where to host releases
 hosting = "github"
-# Whether to install an updater program
-install-updater = false
+# Whether to install an updater program (`midas-update` alongside shell/PowerShell installs).
+# Homebrew users still upgrade via the tap (`brew update midianio/homebrew-tap && brew upgrade midas`).
+install-updater = true
