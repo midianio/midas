@@ -13,7 +13,7 @@ orthogonal attributes:
 
 | Layer | Doc | Status |
 | --- | --- | --- |
-| L1 · Stack & tooling | [`stack.md`](./stack.md) | written |
+| L1 · Stack & tooling | [`stack.md`](./stack.md) (backend rationale: [`why-rust.md`](./why-rust.md)) | written |
 | L2 · Backend (Rust) | [`backend/`](./backend/) + Go→Rust method in [`playbooks/`](./playbooks/) | written |
 | L2 · Frontend (Svelte) | [`frontend/conventions.md`](./frontend/conventions.md) | written |
 | L2 · CLI (Rust) | [`cli/conventions.md`](./cli/conventions.md) | written |

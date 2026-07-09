@@ -8,7 +8,7 @@ a stated swap condition — the escape hatch. Deviation is `ledgered` (record it
 
 | Concern | Choice | Why | May swap when… |
 | --- | --- | --- | --- |
-| **Backend language/framework** | Rust · axum 0.8 · tokio | Type-safety, one static binary, graceful-shutdown control, no GC pauses on streaming. Proven on the Go→Rust port. | The service is a throwaway spike or a function-as-a-service glue job where Rust's build cost isn't worth it. |
+| **Backend language/framework** | Rust · axum 0.8 · tokio | Type-safety, one static binary, graceful-shutdown control, no GC pauses on streaming. Proven on the Go→Rust port. Full argument: [`why-rust.md`](./why-rust.md). | The service is a throwaway spike or a function-as-a-service glue job where Rust's build cost isn't worth it. |
 | **DB access** | sqlx 0.8 (MySQL, `runtime-tokio`, `tls-rustls`), compile-checked `query!` + committed `.sqlx` cache | Compile-time query verification; rustls keeps the Docker image OpenSSL-free. | A project needs Postgres — keep sqlx, change the driver feature. |
 | **API contract** | utoipa → OpenAPI → `openapi-typescript` | Contract is a generated artifact; frontend types can't silently drift from the backend. | Never for a service with a typed frontend client (that's the whole point). |
 | **Frontend** | SvelteKit 2 + Svelte 5 **runes** | Fine-grained reactivity, small bundles, first-class static-adapter output for native/PWA. | A project is headless/CLI/no-UI. |
