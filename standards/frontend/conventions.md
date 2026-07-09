@@ -40,11 +40,16 @@ src/
 Imports always go through the `$lib` alias: `import { notes } from "$lib/state/notes.svelte"`.
 **Singletons are imported as instances, never destructured** (destructuring breaks runes reactivity).
 
-## State — class-based runes singletons
+## State — class-based runes singletons (`FE-0001`)
 
 The core pattern. One class per domain, reactive fields via `$state`, a **single exported instance**
 at module bottom. Files are `src/lib/state/<domain>.svelte.ts`. Canonical: `state/notes.svelte.ts`,
 `state/auth.svelte.ts`, `state/panes.svelte.ts`.
+
+`[check]` only proves `src/lib/state` exists — a cheap structural proxy, not evidence any file in it
+follows the pattern below. Whether a given file is actually a class-based singleton with one exported
+instance (not a factory, not a bag of exported functions) is a `[review]` judgment, delegated to the
+review agent (`standards/review-agent-prompt.md`).
 
 ```ts
 // src/lib/state/notes.svelte.ts
@@ -113,7 +118,10 @@ if (error) { /* handle */ }
   weak-area the backend's utoipa→OpenAPI→TS pipeline exists to close). Target: `midas gen types`
   produces `$lib/types/api.ts` from `openapi.json`; domain types extend the generated ones.
   *Escape:* hand-written types are fine for client-only shapes the backend never sees (UI view-models,
-  local form state).
+  local form state). `midas check`'s mechanical half of `FE-0006` (`artifact-hash`) verifies both
+  `openapi.json` and the generated types file are committed (tracked, not gitignored) — a gitignored
+  source means the pair's freshness can't be verified at all, the concrete failure this rule exists to
+  catch.
 
 ## Navigation — the static-SPA pane system
 

@@ -58,7 +58,8 @@ that makes `CLI-0001…0004` structural) rather than re-implementing the contrac
   re-implemented per command.
 - **An `Output` writer** — `out.data(value)` serializes to stdout as human text *or* `--json` per the
   flag; `out.progress(msg)`/`out.warn(msg)` go to stderr. A command never touches `println!` directly
-  (clippy denies `print_stdout`/`print_stderr`, as in the backend).
+  — `midas check` bans it by grep (`CLI-0009`), and CI's `clippy -D warnings` denies
+  `print_stdout`/`print_stderr` independently, as in the backend.
 - **Exit-code mapping** — commands return a `Result<Outcome, CliError>`; the crate maps `Outcome` /
   `CliError` to the typed codes above. Commands don't call `std::process::exit` themselves; only
   `main` does, via the kernel's `finish()`.

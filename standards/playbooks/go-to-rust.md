@@ -5,8 +5,9 @@ shape is the steady-state backend convention set in [`../backend/`](../backend/)
 **method** that gets an existing Go service there safely: a standards-first, escalating-chunk rewrite
 gated by one cheap, ruthless quality check (live-diff vs. the Go oracle), ending in a full swap.
 
-Proven on midian's `app/api` (~127 routes). It is re-runnable: a sibling Go service *(e.g. prayer)*
-ports by following the same loop, pointing the route lists and DSN at its own terms.
+Proven end-to-end on midian's `app/api`, route by route, to a full swap. It is re-runnable: a sibling
+Go service *(e.g. prayer)* ports by following the same loop, pointing the route lists and DSN at its
+own terms.
 
 Full swap at the end — **no gateway, no shadow/canary.** Those are scale-up concerns; for a beta-scale
 service the live-diff gate plus an instant-rollback deployable is enough.

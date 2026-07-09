@@ -23,7 +23,11 @@ INPUTS
 2. Read `standards/` for the convention text. Focus on the `review`-tier conventions (the ones
    `midas check` lists but does not run) — e.g. BE-0001 (handlers thin), BE-0009 (opaque columns),
    BE-0017 (resilient boot), BE-0019 (no N+1), FE-0009 (no logic in components), FE-0002
-   ($derived for computable), OPS-0009/0010 (schema review, risk-tiered review).
+   ($derived for computable), OPS-0009/0010 (schema review, risk-tiered review). Also judge the
+   review-tier *half* of a check-tier convention whose mechanical spec is a structural proxy, not
+   proof of the pattern — FE-0001 is the example: `midas check` only asserts `src/lib/state` exists;
+   whether a given file is actually a class-based runes singleton with one exported instance is yours
+   to judge.
 3. The PR diff (changed files vs the merge base).
 
 TASK

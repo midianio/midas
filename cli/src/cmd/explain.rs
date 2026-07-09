@@ -205,11 +205,44 @@ fn spec_line(spec: &CheckSpec) -> String {
         CheckSpec::ManagedBlock {} => {
             "managed-block: agent docs carry the current `midas sync` block".into()
         }
-        CheckSpec::ArtifactHash { .. } => "artifact-hash (deferred — reported as skipped)".into(),
-        CheckSpec::ProvenanceDrift {} => "provenance-drift (deferred — reported as skipped)".into(),
-        CheckSpec::Clippy { .. } => {
-            "clippy passthrough (deferred — CI runs clippy directly)".into()
+        CheckSpec::ArtifactHash { source, artifact } => {
+            format!(
+                "artifact-hash: {} committed ↔ {} committed (both must be tracked, not gitignored)",
+                artifact_ref_line(source),
+                artifact_ref_line(artifact)
+            )
         }
+        CheckSpec::CanonContext {
+            globs,
+            canon_true_globs,
+            capped_glob,
+            max_lines,
+            ..
+        } => {
+            let cap = match (capped_glob, max_lines) {
+                (Some(g), Some(n)) => format!("; nested {g} capped at {n} lines"),
+                _ => String::new(),
+            };
+            let canon = if canon_true_globs.is_empty() {
+                String::new()
+            } else {
+                format!("; {} also need canon: true", canon_true_globs.join(", "))
+            };
+            format!(
+                "canon-context: {} need owner+last_reviewed frontmatter{canon}{cap}",
+                globs.join(", ")
+            )
+        }
+    }
+}
+
+fn artifact_ref_line(r: &crate::registry::ArtifactRef) -> String {
+    match r {
+        crate::registry::ArtifactRef::Real { layer, glob } => match layer {
+            Some(l) => format!("{l}:{glob}"),
+            None => glob.clone(),
+        },
+        crate::registry::ArtifactRef::Legacy(text) => format!("{text} (deferred — pre-0.5.0)"),
     }
 }
 

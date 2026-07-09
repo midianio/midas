@@ -51,6 +51,11 @@ changed but wasn't regenerated — the same loop as the committed `.sqlx` cache 
 regenerate the TS client and fail on a dirty tree, so a Rust handler change that breaks the frontend
 contract is caught at PR time, not in the browser.
 
+`midas check`'s mechanical half of `BE-0014` (`artifact-hash`) verifies both `openapi.json` and the
+generated TS client are **committed** — tracked, not gitignored — because a gitignored source makes
+drift unverifiable by construction. It does not regenerate-and-diff; that byte-level freshness check
+is CI's job, above.
+
 ## Optional: a docs UI
 
 Intentionally **not** wired to a CDN (a `<script src=…>` without SRI is a supply-chain exposure, and a

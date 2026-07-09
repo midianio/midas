@@ -8,8 +8,9 @@ Canonical examples live in `app/api/src/`. *Origin: parity-verified during midia
 porting an existing Go service is a separate method — see [`../playbooks/go-to-rust.md`](../playbooks/go-to-rust.md).*
 
 Every rule carries a stable **`BE-####` ID** and an **enforcement tier**:
-`[check]` = mechanically verifiable (banned-call / AST / grep / clippy / structure / artifact-hash),
-`[review]` = semantic (needs a human or agent to judge). This hub covers the stack, structure,
+`[check]` = mechanically verifiable by `midas check` (banned-call grep / file-structure /
+artifact-hash — clippy runs in CI, not in `midas`), `[review]` = semantic (needs a human or agent to
+judge). This hub covers the stack, structure,
 handlers, envelope, errors, DB, the `AppState` seams, JSON, auth, and quality gates, and links to the
 four deep-dive docs:
 [authorization](./authorization.md) · [feature-gating](./feature-gating.md) ·
@@ -172,10 +173,10 @@ globals, no per-handler construction.
 ## Observability → [`observability.md`](./observability.md)
 
 - `BE-0012` `[check]` **Logs via `tracing::{info,warn,error}!` with structured fields** — never
-  `println!`/`eprintln!`/bare `log`. `clippy -D warnings` + a deny on `print_stdout`/`print_stderr`
-  enforces it. Each request already carries `request_id` + (post-auth) `user_id` on its span,
-  inherited automatically.
-- `BE-0013` `[check]` **Telemetry only through the vendor-neutral ports** (`st.telemetry.*` + the OTLP
+  `println!`/`eprintln!`/bare `log`. `midas check` bans the print macros by grep; CI's
+  `cargo clippy -- -D warnings` denies `print_stdout`/`print_stderr` independently. Each request
+  already carries `request_id` + (post-auth) `user_id` on its span, inherited automatically.
+- `BE-0013` `[review]` **Telemetry only through the vendor-neutral ports** (`st.telemetry.*` + the OTLP
   pillars) — never a raw vendor SDK call in a handler. Swapping a capability is an adapter swap, not a
   refactor. *(midian: PostHog Cloud behind the ports; LLM usage rides the AI-client choke point.)*
 - `[review]` **PII scrubbed at the emit boundary** (allowlist, not blocklist); telemetry is fail-open

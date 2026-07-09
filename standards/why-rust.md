@@ -16,15 +16,15 @@ skimming it is the same bottleneck that misses data races and lifetime bugs in h
 faster. Rust's compiler performs exhaustive checks — borrow/lifetime, exhaustive-match, `Send`/`Sync` —
 on every candidate diff, agent-authored or not, before it can run.
 
-That's not hypothetical here: `AGT-0001`–`AGT-0006` (`standards/agents.md`) already assume most authors
+That's not hypothetical here: `AGT-0001`–`AGT-0009` (`standards/agents.md`) already assume most authors
 are agents and lean on `midas check` plus a semantic reviewer to catch what a linter can't. Rust adds a
 **third arm that runs before either of them, on every build, for free**: `cargo build` rejects whole
 classes of bugs (use-after-free, data races, null derefs) that would otherwise need a human or a
-review-tier convention to catch. The two mechanical, `check`-tier backend rules that most directly
-encode this are:
+review-tier convention to catch. Three mechanical, `check`-tier backend rules most directly encode this:
 
-- **`BE-0012`** — clippy denies `print_stdout`/`print_stderr`; a mistake that in a dynamically-typed
-  stack ships silently is a compile failure here.
+- **`BE-0012`** — banned-call grep denies `print!`/`eprintln!` in `midas check`, and CI's
+  `cargo clippy -- -D warnings` denies `print_stdout`/`print_stderr` independently; a mistake that in a
+  dynamically-typed stack ships silently is a compile failure here.
 - **`BE-0010`, `BE-0016`** — the `Http`/`ids` seams are enforced by grep-able bans, but the reason a
   bypass is *catchable at all* is that Rust's type system makes "wrong seam" a type error, not a
   runtime surprise three services downstream.
@@ -49,10 +49,14 @@ bug from "found in review or production" to "doesn't compile" is the whole point
 
 `async`/`await` in Rust compiles to a state machine with no allocation or scheduler overhead beyond what
 tokio needs to run it — the abstraction costs nothing you didn't already ask for. This is the same
-philosophy `stack.md` applies architecturally: `sqlx`'s `query!` macro (`BE-0018`) verifies SQL against
-the live schema **at compile time**, so a query with a typo'd column or a type mismatch is a build
-failure, not a 2 a.m. page. That's a compiler-enforced guarantee doing a job that in a dynamically-typed
-stack needs a runtime test *and* a human catching the gap in that test.
+philosophy `stack.md` applies architecturally: where a crate uses `sqlx`'s `query!` macro, it verifies
+that SQL against the live schema **at compile time**, so a query with a typo'd column or a type mismatch
+is a build failure, not a 2 a.m. page — the compiler's guarantee, not `midas check`'s. `BE-0018`
+recommends adopting `query!` (`review`-tier, `ledgered`); it isn't gate-enforced, and midian currently
+deviates from it (runtime-checked `sqlx::query` instead — see `midas.toml [deviations]`), so the
+guarantee only applies where the macro is actually used. That's still a categorically different failure
+mode than a dynamically-typed stack, where the same class of bug needs a runtime test *and* a human
+catching the gap in that test.
 
 ## Rust doesn't replace Python here — it's already partitioned that way
 

@@ -111,6 +111,12 @@ pub const RUST_SERVICE: &[TemplateFile] = &[
         "db/migrations/001_init.sql",
         include_str!("../../../templates/rust-service/db/migrations/001_init.sql"),
     ),
+    // Committed contract (BE-0014/OPS-0003): the spec matching the sample `items` route. Regenerate
+    // from the `#[utoipa::path]` annotations once real routes replace the sample, and commit it.
+    tf(
+        "app/api/openapi.json",
+        include_str!("../../../templates/rust-service/openapi.json"),
+    ),
 ];
 
 /// The `svelte-app` skeleton: a conformant SvelteKit app under `app/web/` (the canonical frontend
@@ -178,6 +184,12 @@ pub const SVELTE_APP: &[TemplateFile] = &[
     tf(
         "app/web/src/routes/app/+page.svelte",
         include_str!("../../../templates/svelte-app/src/routes/app/+page.svelte"),
+    ),
+    // Committed, generated from `app/api/openapi.json` (FE-0006/OPS-0003) — matches the sample
+    // `items` route. Regenerate with an OpenAPI-to-TS tool once real routes replace the sample.
+    tf(
+        "app/web/src/lib/types/api.generated.ts",
+        include_str!("../../../templates/svelte-app/src/lib/types/api.generated.ts"),
     ),
 ];
 

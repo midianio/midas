@@ -19,6 +19,7 @@ const HISTORY: &[(&str, &str)] = &[
     ("0.3.0", include_str!("../../registry/history/0.3.0.json")),
     ("0.4.0", include_str!("../../registry/history/0.4.0.json")),
     ("0.4.1", include_str!("../../registry/history/0.4.1.json")),
+    ("0.5.0", include_str!("../../registry/history/0.5.0.json")),
 ];
 
 #[derive(Debug, Deserialize)]
@@ -96,23 +97,46 @@ pub enum CheckSpec {
     /// The version-stamped `midas sync` managed block must be present and current in every agent
     /// doc (`CLAUDE.md`, `AGENTS.md`), stamped with the version of the standard being evaluated.
     ManagedBlock {},
-    /// A generated artifact must be in sync with its source (deferred — reported as skipped).
+    /// Both halves of a generated-artifact pair (the source of truth and the generated output) must
+    /// be committed — i.e. tracked and not gitignored. This is the mechanical half of "regenerated &
+    /// committed": it catches the concrete failure mode of a gitignored source with a committed
+    /// artifact (no way to verify the artifact is current). Byte-level regeneration diffing is CI's
+    /// job (`OPS-0002`'s Rust/frontend gates), not this scan's.
     ArtifactHash {
-        #[serde(default)]
-        #[allow(dead_code)]
-        source: Option<String>,
-        #[serde(default)]
-        #[allow(dead_code)]
-        artifact: Option<String>,
+        source: ArtifactRef,
+        artifact: ArtifactRef,
     },
-    /// A vendored `// midas:provenance` file vs its canonical version (deferred — skipped).
-    ProvenanceDrift {},
-    /// Passthrough a clippy lint (deferred — skipped; CI runs clippy directly).
-    Clippy {
+    /// Canonical context docs (`AGENTS.md` at any depth, `SKILL.md`, `ARCHITECTURE.md`, …) matching
+    /// `globs` (minus `exclude`) must carry `owner` + `last_reviewed` frontmatter; those additionally
+    /// matching `canon_true_globs` (root-canon docs, not `SKILL.md`) must also carry `canon: true`; a
+    /// nested (non-root) file also matching `capped_glob` is capped at `max_lines` (AGT-0009).
+    CanonContext {
+        globs: Vec<String>,
         #[serde(default)]
-        #[allow(dead_code)]
-        lint: Option<String>,
+        exclude: Vec<String>,
+        #[serde(default)]
+        canon_true_globs: Vec<String>,
+        #[serde(default)]
+        capped_glob: Option<String>,
+        #[serde(default)]
+        max_lines: Option<u32>,
     },
+}
+
+/// One half of an [`CheckSpec::ArtifactHash`] pair. `Real` is the checkable 0.5.0+ shape — a glob,
+/// layer-relative like other specs (defaulting to the convention's own layer). `Legacy` is the
+/// free-text shape frozen in `registry/history/{0.2.0..0.4.1}.json`, kept parseable so `midas drift`
+/// can still resolve old snapshots; a convention using it always evaluates as `Skipped` (it did back
+/// then too — the kind was deferred pre-0.5.0).
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+pub enum ArtifactRef {
+    Real {
+        #[serde(default)]
+        layer: Option<String>,
+        glob: String,
+    },
+    Legacy(String),
 }
 
 impl Registry {
@@ -223,6 +247,33 @@ mod tests {
     fn available_versions_includes_live() {
         let live = Registry::embedded().unwrap();
         assert!(Registry::available_versions().contains(&live.version));
+    }
+
+    /// IDs are stable once published (`SPEC.md §6`) and are assigned by appending to a layer's
+    /// prefix — a gap (`BE-0013` then `BE-0015`, no `BE-0014`) means an entry was renumbered or
+    /// deleted instead of deprecated in place, silently breaking anything that cited the missing ID.
+    #[test]
+    fn convention_ids_are_contiguous_per_prefix() {
+        let live = Registry::embedded().unwrap();
+        let mut by_prefix: std::collections::HashMap<&str, Vec<u32>> =
+            std::collections::HashMap::new();
+        for c in &live.conventions {
+            let (prefix, num) =
+                c.id.rsplit_once('-')
+                    .unwrap_or_else(|| panic!("malformed id {:?} (want PREFIX-NNNN)", c.id));
+            let num: u32 = num
+                .parse()
+                .unwrap_or_else(|_| panic!("malformed id {:?} (want PREFIX-NNNN)", c.id));
+            by_prefix.entry(prefix).or_default().push(num);
+        }
+        for (prefix, mut nums) in by_prefix {
+            nums.sort_unstable();
+            let expected: Vec<u32> = (1..=nums.len() as u32).collect();
+            assert_eq!(
+                nums, expected,
+                "{prefix}-#### ids have a gap or duplicate: {nums:?}"
+            );
+        }
     }
 
     /// The one-tag invariant (SPEC §7): the binary's crate version IS the standard version it

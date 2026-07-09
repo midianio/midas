@@ -20,6 +20,18 @@ orthogonal attributes:
 | L4 · Process & ops | [`process.md`](./process.md) | written |
 | L5 · Agent playbook | [`agents.md`](./agents.md) | written |
 
+## Editorial rules for standards prose
+
+- **State invariants, never point-in-time counts of another repo.** "Runtime-checked sqlx, no
+  `query!` macros" ages fine; "167 call sites" doesn't — it's stale the next time someone adds one,
+  and nothing catches the drift (this is prose, not `registry/conventions.json`; `midas check` never
+  reads it). If a number is genuinely load-bearing, cite the invariant it's meant to demonstrate
+  instead of the count.
+- **The standard, not any one consumer, is the subject.** midian is the reference implementation, not
+  the audience — write "the wire envelope is `{data,code,timestamp,count}`", not "midian uses the
+  envelope `{...}`". When an example needs a concrete instance, mark it clearly hypothetical unless
+  it's a fact checked against the live consumer repo at time of writing.
+
 ## Seed convention catalog
 
 The conventions extractable from the midian apps + the CLI/agent layers, as IDed entries. This is the
@@ -49,9 +61,9 @@ exhaustive; promotion of new entries follows `SPEC.md §9`.
 | BE-0009 | Opaque columns stay opaque (`Option<String>`/`Value`); never strict-type passthrough JSON. | review | hard |
 | BE-0010 | Outbound HTTP only through the pooled `Http` seam; never `reqwest::Client::new()` in a handler. | check | hard |
 | BE-0011 | Background work via the `Tasks` tracker (awaited on shutdown); not bare `tokio::spawn`. | review | hard |
-| BE-0012 | Logs via `tracing::{info,warn,error}!`; clippy denies `print_stdout`/`print_stderr`. | check | hard |
+| BE-0012 | Logs via `tracing::{info,warn,error}!`; never `print!`/`eprintln!`. | check | hard |
 | BE-0013 | Telemetry only through the vendor-neutral ports (`st.telemetry.*`); never a raw vendor SDK call. | review | hard |
-| BE-0014 | API contract is generated (utoipa → OpenAPI → TS); no central registry to drift. | check (artifact-hash, deferred) | ledgered |
+| BE-0014 | API contract is generated (utoipa → OpenAPI → TS); no central registry to drift. | check (artifact-hash) | ledgered |
 | BE-0015 | SSE is byte-exact (`event:`/`data:` framing, 15s heartbeat, five headers, no `[DONE]`). | review | hard |
 | BE-0016 | IDs via `ids::generate()`; don't inline `uuid`. | check | hard |
 | BE-0017 | Resilient boot: liveness independent of DB (`/ping` works without a pool); ordered graceful shutdown. | review | hard |
@@ -61,12 +73,12 @@ exhaustive; promotion of new entries follows `SPEC.md §9`.
 ### Frontend — `FE-` (full prose in [`frontend/conventions.md`](./frontend/conventions.md))
 | ID | Rule | Tier | Escape |
 | --- | --- | --- | --- |
-| FE-0001 | Global state = class-based runes singleton per domain, one exported instance, in `lib/state/<d>.svelte.ts`. | check | hard |
+| FE-0001 | Global state = class-based runes singleton per domain, one exported instance, in `lib/state/<d>.svelte.ts` (mechanical half: `src/lib/state` exists — a proxy, not proof of the pattern; the singleton shape itself is the delegated reviewer's job). | check | hard |
 | FE-0002 | `$state` for source-of-truth, `$derived` for anything computable. | review | advisory |
 | FE-0003 | Reactive collections use `SvelteSet`/`SvelteMap`/`SvelteDate`, never plain `Set`/`Map` in `$state`. | review | hard |
 | FE-0004 | One codebase; native/PWA via the `CAPACITOR_BUILD` adapter switch + `cap:build:*` scripts. | review | ledgered (web-only) |
 | FE-0005 | All backend calls through the typed `api<T>()` wrapper; never `fetch()` a backend route directly. | review | hard |
-| FE-0006 | API types generated from OpenAPI; hand-written types only for client-only shapes. | check (artifact-hash, deferred) | ledgered |
+| FE-0006 | API types generated from OpenAPI; hand-written types only for client-only shapes. | check (artifact-hash) | ledgered |
 | FE-0007 | Content nav = the pane system (`openTarget`/url-codec/registry), not `goto()` routing. | review | ledgered |
 | FE-0008 | Cross-singleton communication is a direct method call, not a global DOM event. | check | advisory |
 | FE-0009 | No fetch/mutation/orchestration logic in components — it lives in `state/`. | review | hard |
@@ -90,15 +102,16 @@ exhaustive; promotion of new entries follows `SPEC.md §9`.
 
 > The CLI contract rules (CLI-0001…0005, 0008) are properties of a binary's *behavior*, not its
 > source text — they're verified by that CLI's own test suite (as `midas`'s is), not by scanning, so
-> they carry `review` tier. CLI-0009 is the scannable exception (banned print macros + the clippy
-> deny).
+> they carry `review` tier. CLI-0009 is the scannable exception: `midas check` bans the print macros
+> by grep; a CI-side `clippy -D warnings` deny is a separate, independent enforcer, not something
+> `midas` runs.
 
 ### Process & ops — `OPS-` (full prose in [`process.md`](./process.md))
 | ID | Rule | Tier | Escape |
 | --- | --- | --- | --- |
 | OPS-0001 | Release/branch flow via midflow (now `midas flow`): PR → review → merge; dev/main split; hotfix path. | review | ledgered |
 | OPS-0002 | Quality gates green before merge (build/test/lint/typecheck per stack). | review | hard |
-| OPS-0003 | Generated artifacts (`.sqlx`, OpenAPI, TS client) regenerated & committed (CI drift guard). | check (artifact-hash, deferred) | hard |
+| OPS-0003 | Generated artifacts (OpenAPI, TS client) are committed; regeneration itself is CI's job, not `midas check`'s. | check (artifact-hash) | hard |
 | OPS-0004 | Destructive prod data ops are handed to a human with exact commands, not run by tooling/agents. | review | hard |
 | OPS-0005 | One-command bootstrap (`midas setup` owns install → tunnel → doctor). | review | advisory |
 | OPS-0006 | Local dev = pscale proxy + dotenv chain (`ENV_FILE`→`.env`→`.env.local`); `midas flow` owns the `.env.local` tunnel block — don't hand-edit. | review | hard |
@@ -109,6 +122,7 @@ exhaustive; promotion of new entries follows `SPEC.md §9`.
 | OPS-0011 | Husky + lint-staged pre-commit not bypassed (`--no-verify`). | review | hard |
 | OPS-0012 | Never commit `.env.local`/secrets; never force-push `main`/`dev`. | check | hard |
 | OPS-0013 | Native ships via manual fastlane dispatch; static SPA via `CAPACITOR_BUILD`. | review | ledgered (web-only) |
+| OPS-0014 | Every `[deviations]` entry has a tracked path to resolution in a conformance journal. | review | advisory |
 
 ### Agent playbook — `AGT-` (full prose in [`agents.md`](./agents.md))
 | ID | Rule | Tier | Escape |
@@ -119,10 +133,15 @@ exhaustive; promotion of new entries follows `SPEC.md §9`.
 | AGT-0004 | On conflict between a stale local doc and the pinned standard, the standard wins. | review | hard |
 | AGT-0005 | Use the seams the conventions name; don't reach around them. | review | hard |
 | AGT-0006 | The semantic reviewer returns structured findings keyed to convention IDs. | review | hard |
+| AGT-0007 | Run impact analysis before editing a symbol; run `detect_changes()` before committing. | review | hard |
+| AGT-0008 | A conformant repo ships the required per-domain skill bundle, each a thin doc over `standards/`. | review | advisory |
+| AGT-0009 | Canonical `AGENTS.md`/`SKILL.md`/`ARCHITECTURE.md` carry `owner`+`last_reviewed` frontmatter; nested `AGENTS.md` capped at 80 lines. | check | hard |
 
 > IDs are stable once published. Tier, escape policy, and the enforcing check spec are mirrored in
 > `registry/conventions.json` (embedded in the `midas` binary) — the form tooling reads. The
 > `check`-tier specs are layer-relative: a project's `midas.toml [layout]` maps each layer onto its
 > repo (defaults: `backend = "app/api"`, `frontend = "app/web"`), and `[check.allow]` records
-> project-specific allow-list exceptions (e.g. midian ledgers its `sharelink` inline-uuid there,
-> not in the org registry).
+> project-specific allow-list exceptions — a hypothetical: a project with one legitimate inline UUID
+> outside the org registry's `allow_in` list would add its path under `[check.allow]."BE-0016"`
+> rather than get an org-wide exception or a `[deviations]` ledger entry. midian doesn't currently
+> use `[check.allow]`; its own exceptions are recorded in `[deviations]` (see `midas.toml`).

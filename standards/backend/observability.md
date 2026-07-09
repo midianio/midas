@@ -138,8 +138,10 @@ choke points every slice already flows through.
 
 **Rule for porters** (`BE-0012` + `BE-0013`): never call a vendor SDK directly, never `println!`/bare
 `log`. Logs = `tracing::{info,warn,error}!` with fields. Errors = return `AppError` (capture is
-automatic). LLM = through the AI client. Analytics/flags = through `st.telemetry`. Enforced by
-`clippy -D warnings` + a deny on `print_stdout`/`print_stderr`.
+automatic). LLM = through the AI client. Analytics/flags = through `st.telemetry`. Two independent
+enforcers, not one duplicated: `midas check` bans `print!`/`eprintln!` by grep (fast, no build step);
+CI's `cargo clippy --all-targets -- -D warnings` separately denies `print_stdout`/`print_stderr` at
+compile time. `midas` doesn't run a clippy passthrough — that would duplicate what CI already owns.
 
 ---
 

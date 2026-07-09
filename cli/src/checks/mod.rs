@@ -150,6 +150,78 @@ impl Scanner {
             .collect())
     }
 
+    /// Whether at least one tracked (non-gitignored) file matches `glob` — the presence half of
+    /// `artifact-hash`: a glob matching nothing means the file is either absent or gitignored, and
+    /// either way there's nothing committed for drift to be checked against.
+    pub fn any_match(&self, glob: &str) -> Result<bool> {
+        let set = build_globset(std::slice::from_ref(&glob.to_string()))?;
+        Ok(self.files.iter().any(|rel| set.is_match(rel_slash(rel))))
+    }
+
+    /// AGT-0009: canonical context docs matching `globs` (minus `exclude`) must carry `owner` +
+    /// `last_reviewed` frontmatter keys; those additionally matching `canon_true_globs` (root-canon
+    /// docs — everything except `SKILL.md`, which has its own `name`/`description` contract) must
+    /// also carry `canon: true`; a *nested* (non-root) file additionally matching `capped_glob` is
+    /// capped at `max_lines` — the operational-discipline forcing function on per-directory
+    /// `AGENTS.md`.
+    pub fn canon_context(
+        &mut self,
+        globs: &[String],
+        exclude: &[String],
+        canon_true_globs: &[String],
+        capped_glob: Option<&str>,
+        max_lines: u32,
+    ) -> Result<Vec<Finding>> {
+        let glob_set = build_globset(globs)?;
+        let exclude_set = build_globset(exclude)?;
+        let canon_true_set = build_globset(canon_true_globs)?;
+        let capped_set = capped_glob
+            .map(|g| build_globset(std::slice::from_ref(&g.to_string())))
+            .transpose()?;
+
+        let candidates = self.matching_files(&glob_set, &exclude_set);
+        let mut findings = Vec::new();
+        for rel in candidates {
+            let rel_str = rel_slash(&rel);
+            let Some(content) = self.content(&rel) else {
+                continue;
+            };
+            let fm = frontmatter_map(content);
+            for key in ["owner", "last_reviewed"] {
+                if !fm.contains_key(key) {
+                    findings.push(Finding {
+                        file: rel_str.clone(),
+                        line: 0,
+                        text: format!("missing '{key}' in frontmatter"),
+                    });
+                }
+            }
+            if canon_true_set.is_match(&rel_str)
+                && fm.get("canon").map(String::as_str) != Some("true")
+            {
+                findings.push(Finding {
+                    file: rel_str.clone(),
+                    line: 0,
+                    text: "missing 'canon: true' in frontmatter".into(),
+                });
+            }
+            let is_nested = rel_str.contains('/');
+            if is_nested && capped_set.as_ref().is_some_and(|s| s.is_match(&rel_str)) {
+                let lines = content.lines().count() as u32;
+                if lines > max_lines {
+                    findings.push(Finding {
+                        file: rel_str.clone(),
+                        line: 0,
+                        text: format!(
+                            "{lines} lines exceeds the {max_lines}-line cap for nested docs"
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(findings)
+    }
+
     /// Check that required paths exist and forbidden paths do not (relative to root).
     pub fn file_structure(&self, must_exist: &[String], must_not_exist: &[String]) -> Vec<Finding> {
         let mut findings = Vec::new();
@@ -184,6 +256,29 @@ fn rel_slash(rel: &Path) -> String {
     } else {
         s.into_owned()
     }
+}
+
+/// Present, non-empty `key: value` pairs from a file's leading `---`-delimited frontmatter block
+/// (line 1 must be exactly `---`). Minimal single-line scan — matches how these docs are actually
+/// authored, not a full YAML parser.
+fn frontmatter_map(content: &str) -> std::collections::HashMap<String, String> {
+    let mut kv = std::collections::HashMap::new();
+    let mut lines = content.lines();
+    if lines.next() != Some("---") {
+        return kv;
+    }
+    for line in lines {
+        if line.trim() == "---" {
+            break;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            let v = v.trim().trim_matches('"');
+            if !v.is_empty() {
+                kv.insert(k.trim().to_string(), v.to_string());
+            }
+        }
+    }
+    kv
 }
 
 fn build_globset(patterns: &[String]) -> Result<GlobSet> {

@@ -4,7 +4,7 @@
 //! also lay down a runnable, conformant skeleton (the `rust-service` template for `service`) that
 //! compiles and passes `midas check` out of the box.
 
-use crate::cmd::sync::managed_block;
+use crate::cmd::sync::{agents_frontmatter, managed_block};
 use crate::cmd::templates::{self, TemplateFile, RUST_SERVICE, SVELTE_APP};
 use crate::core::exit::{CliError, CliResult};
 use crate::core::{prompt_line, Ctx};
@@ -100,7 +100,10 @@ pub fn run(
         ("README.md".into(), readme(&name, profile)),
         (".gitignore".into(), GITIGNORE.to_string()),
         ("CLAUDE.md".into(), format!("# {name}\n\n{block}\n")),
-        ("AGENTS.md".into(), format!("# {name}\n\n{block}\n")),
+        (
+            "AGENTS.md".into(),
+            format!("{}# {name}\n\n{block}\n", agents_frontmatter()),
+        ),
         (".github/workflows/ci.yml".into(), ci_yml(profile)),
     ];
     // Runnable code skeleton (token-substituted), for profiles that ship one.

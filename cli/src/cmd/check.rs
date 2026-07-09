@@ -7,7 +7,7 @@ use crate::core::exit::{CliError, CliResult};
 use crate::core::Ctx;
 use crate::flow::config::FlowConfig;
 use crate::manifest::Manifest;
-use crate::registry::{CheckSpec, Convention, Escape, Registry, Tier};
+use crate::registry::{ArtifactRef, CheckSpec, Convention, Escape, Registry, Tier};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::HashSet;
@@ -312,26 +312,32 @@ pub fn outcome_of(
             }
         }
         CheckSpec::ManagedBlock {} => (managed_block_findings(scanner, standard_version), None),
-        CheckSpec::ArtifactHash { .. } => {
-            return eval(
-                Outcome::Skipped,
-                vec![],
-                Some("artifact-hash check deferred".into()),
-            )
+        CheckSpec::ArtifactHash { source, artifact } => {
+            match artifact_hash_findings(conv, manifest, has_manifest, scanner, source, artifact) {
+                Ok(f) => (f, None),
+                Err(note) => return eval(Outcome::Skipped, vec![], Some(note)),
+            }
         }
-        CheckSpec::ProvenanceDrift {} => {
-            return eval(
-                Outcome::Skipped,
-                vec![],
-                Some("provenance-drift check deferred".into()),
-            )
-        }
-        CheckSpec::Clippy { .. } => {
-            return eval(
-                Outcome::Skipped,
-                vec![],
-                Some("clippy passthrough deferred (CI runs clippy directly)".into()),
-            )
+        CheckSpec::CanonContext {
+            globs,
+            exclude,
+            canon_true_globs,
+            capped_glob,
+            max_lines,
+        } => {
+            let globs = prefixed(&prefix, globs);
+            let exclude = prefixed(&prefix, exclude);
+            let canon_true_globs = prefixed(&prefix, canon_true_globs);
+            match scanner.canon_context(
+                &globs,
+                &exclude,
+                &canon_true_globs,
+                capped_glob.as_deref(),
+                max_lines.unwrap_or(80),
+            ) {
+                Ok(f) => (f, None),
+                Err(e) => return eval(Outcome::Skipped, vec![], Some(format!("check error: {e}"))),
+            }
         }
     };
 
@@ -413,6 +419,62 @@ fn managed_block_findings(scanner: &Scanner, version: &str) -> Vec<Finding> {
     findings
 }
 
+/// `artifact-hash`: both halves of the pair must be tracked (not gitignored) — see
+/// [`crate::registry::CheckSpec::ArtifactHash`]. `Err` (a `Legacy` free-text side, from a frozen
+/// pre-0.5.0 snapshot) means the whole check is `Skipped`, matching that snapshot's real behavior.
+/// A side whose layer the project doesn't declare at all (e.g. a `frontend` glob on a backend-only
+/// `service` profile) is vacuously satisfied — same "layer not applicable" rule `applicable()` uses
+/// for a convention's own layer, applied per-side since a pair can span two layers.
+fn artifact_hash_findings(
+    conv: &Convention,
+    manifest: &Manifest,
+    has_manifest: bool,
+    scanner: &Scanner,
+    source: &ArtifactRef,
+    artifact: &ArtifactRef,
+) -> Result<Vec<Finding>, String> {
+    let mut findings = Vec::new();
+    for (label, r) in [("source", source), ("artifact", artifact)] {
+        let ArtifactRef::Real { layer, glob } = r else {
+            return Err("artifact-hash check deferred (frozen pre-0.5.0 registry)".into());
+        };
+        let layer = layer.as_deref().unwrap_or(conv.layer.as_str());
+        if !layer_applies(manifest, has_manifest, layer) {
+            continue;
+        }
+        let prefix = layer_prefix(manifest, layer);
+        let full_glob = match &prefix {
+            Some(p) => format!("{p}/{glob}"),
+            None => glob.clone(),
+        };
+        match scanner.any_match(&full_glob) {
+            Ok(true) => {}
+            Ok(false) => findings.push(Finding {
+                file: full_glob,
+                line: 0,
+                text: format!(
+                    "{label} is missing or gitignored — commit it so the pair can't silently drift"
+                ),
+            }),
+            Err(e) => return Err(format!("check error: {e}")),
+        }
+    }
+    Ok(findings)
+}
+
+/// Whether `layer` applies to this project at all (ignoring which *stack* it's pinned to — see
+/// [`applicable`] for that half). Stack-agnostic layers always apply.
+fn layer_applies(manifest: &Manifest, has_manifest: bool, layer: &str) -> bool {
+    if !matches!(layer, "backend" | "frontend" | "cli") {
+        return true;
+    }
+    match current_stack(manifest, layer) {
+        Some(_) => true,
+        None if has_manifest => false, // project declares no such layer → n/a
+        None => matches!(layer, "backend" | "frontend"), // midian no-manifest defaults
+    }
+}
+
 fn evaluate(
     conv: &Convention,
     manifest: &Manifest,
@@ -434,31 +496,29 @@ fn evaluate(
 }
 
 /// A convention applies unless it pins a `stack` that differs from the project's current stack for
-/// its layer. Stack-agnostic layers (cli/process/agent/stack) always apply.
-///
-/// A layer the project doesn't declare in `[stack]` is **not applicable** — a CLI/library repo
-/// doesn't get the frontend/backend *app* conventions. The midian defaults (backend=rust,
-/// frontend=svelte) are only assumed when there's no manifest at all (the `check --root midian`
-/// convenience before midian adopts a `midas.toml`).
+/// its layer — [`layer_applies`] handles "does this layer exist here at all"; this adds "and does it
+/// match the pinned stack". The midian defaults (backend=rust, frontend=svelte) are only assumed when
+/// there's no manifest at all (the `check --root midian` convenience before midian adopts a
+/// `midas.toml`).
 fn applicable(conv: &Convention, manifest: &Manifest, has_manifest: bool) -> bool {
     let Some(want) = &conv.stack else {
         return true;
     };
     let layer = conv.layer.as_str();
-    if !matches!(layer, "backend" | "frontend" | "cli") {
-        return true;
+    if !layer_applies(manifest, has_manifest, layer) {
+        return false;
     }
-    let current = match current_stack(manifest, layer) {
-        Some(s) => s,
-        None if has_manifest => return false, // project declares no such layer → n/a
-        None => match layer {
-            // The no-manifest midian defaults; an app repo has no CLI layer.
-            "backend" => "rust".into(),
-            "frontend" => "svelte".into(),
-            _ => return false,
-        },
-    };
+    let current = current_stack(manifest, layer).unwrap_or_else(|| default_stack(layer));
     &current == want
+}
+
+/// The no-manifest midian defaults for a stack-pinned layer; an app repo has no CLI layer.
+fn default_stack(layer: &str) -> String {
+    match layer {
+        "backend" => "rust".into(),
+        "frontend" => "svelte".into(),
+        _ => String::new(),
+    }
 }
 
 fn current_stack(manifest: &Manifest, layer: &str) -> Option<String> {

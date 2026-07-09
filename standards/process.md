@@ -13,10 +13,10 @@ close the loop.
 ## Stack of record
 
 Monorepo: **Bun** workspaces (`app/web`, `app/api`, `app/db-tunnel`) orchestrated by **turbo**
-(`package.json:5-10`, `turbo.json`). Backend is **Rust/axum** at `app/api` (on `chore/rust-rewrite`;
-the root `README.md` still describes the Go Chi predecessor — treat the crate, not the README, as
-truth: `app/api/package.json:6` runs `cargo run --bin server`). DB is **PlanetScale/Vitess (MySQL)**,
-reached locally through a `pscale` tunnel. Native via **Capacitor** + **fastlane**.
+(`package.json:5-10`, `turbo.json`). Backend is **Rust/axum** at `app/api` — the port from the earlier
+Go/Chi backend is complete and merged; `app/api/package.json:6` runs `cargo run --bin server`. DB is
+**PlanetScale/Vitess (MySQL)**, reached locally through a `pscale` tunnel. Native via **Capacitor** +
+**fastlane**.
 
 ## Setup & bootstrap
 
@@ -129,11 +129,14 @@ Lint/format/typecheck runs on every PR and on push to `main` (`.github/workflows
 - **OPS-0002 [check]** — Context lint: `scripts/context-scan.sh --ci` blocks if a canonical
   `AGENTS.md`/`SKILL.md`/`ARCHITECTURE.md` lacks `owner`/`last_reviewed`/`canon:true` frontmatter, or a
   nested `AGENTS.md` exceeds 80 lines (`lint.yml:84-90`; `scripts/context-scan.sh:1-20`).
-- **OPS-0002 [check] [gap]** — Backend: `cargo build`, `cargo test`, and `cargo clippy -- -D warnings`
-  (the crate forbids `unsafe_code` and warns `clippy::all`: `app/api/Cargo.toml:17-22`). The Cargo
-  comment says "CI runs `clippy -- -D warnings`", **but no workflow runs Rust yet** — `lint.yml` has no
-  cargo job. `midas check` / a CI job must add it. Proof tests already pass locally:
-  `tests/{sse_framing,json_roundtrip,auth_verify}.rs` (`app/api/README.md:9-16`).
+- **OPS-0002 [check]** — Backend: a dedicated Rust workflow blocks on `cargo clippy --all-targets --
+  -D warnings` then `cargo test`, run from `app/api` (`.github/workflows/api-rust.yml`). The crate
+  also forbids `unsafe_code` and warns `clippy::all` at the source level
+  (`app/api/Cargo.toml:17-22`) — the workflow is what actually gates a PR on it.
+- **OPS-0002 / AGT-0003 [check]** — `midas` conformance: a `mechanical` job blocks on `midas check`
+  then `midas sync --check` (agent docs current); a `semantic` job runs `midas check --json` and
+  posts the review-tier convention set to the job summary for a delegated reviewer — advisory,
+  `continue-on-error: true`, never blocks (`.github/workflows/midas.yml`).
 - **OPS-0002 [check] [gap]** — `bun run test` (turbo: vitest + Playright) and the dual-adapter web
   build (`vite build` and `CAPACITOR_BUILD=1 vite build`) are not gated in CI today; the planned
   `plans/001-ci-test-gates.md` is where this lands.
@@ -147,17 +150,20 @@ The contract is: anything generated from another source of truth is committed, a
   migrations land on `dev`, `db-codegen.yml` regenerates against the live `dev` schema and opens a PR
   if `db/gen/` changed (`.github/workflows/db-codegen.yml:13-17,73-106`). Commit a new migration **and**
   its regenerated bindings together (`db/README.md:133`).
-- **OPS-0003 [check] [gap]** — The API contract is generated from the Rust handlers'
-  `#[utoipa::path]` annotations: `cargo run --example export_openapi` → `openapi.json` (no DB/server
-  needed), then `openapi-typescript` → the TS client (`app/api/scripts/gen-types.sh:14-20`;
-  `app/api/examples/export_openapi.rs:9-15`). **Not yet committed or CI-guarded** — `openapi.json` /
-  `openapi.types.ts` are still gitignored "for now" (`app/api/.gitignore:2-4`). Target: commit them and
-  add the drift check (same loop as `db/gen`). This is the **FE-0006** producer.
-- **OPS-0003 [check] [gap]** — sqlx is currently used in its **runtime** form (`sqlx::query`/
-  `query_as::<_,T>`, 167 call sites, zero `query!` macros), so builds need no DB and no cache. The
-  documented target (`plans/006-rust-backend-port.md:230-240`) is to adopt compile-time `query!` +
-  commit the **`.sqlx` offline cache** (`cargo sqlx prepare`) so CI/Railway build without a DB; a schema
-  change then means regenerate-and-commit the cache, drift-guarded like the above.
+- **OPS-0003 [check]** — The API contract is generated from the Rust handlers' `#[utoipa::path]`
+  annotations: `cargo run --example export_openapi` → `openapi.json` (no DB/server needed), then
+  `openapi-typescript` → the TS client (`app/api/scripts/gen-types.sh:14-20`;
+  `app/api/examples/export_openapi.rs:9-15`). `midas check` (`artifact-hash`) mechanically requires
+  both `openapi.json` and the generated TS client to be **committed** — tracked, not gitignored. This
+  is the **FE-0006** producer. **[gap]** the byte-level regenerate-and-diff guard (same loop as
+  `db/gen`, below) isn't wired into CI yet — only the commit-status half is enforced today.
+- **OPS-0003 [check] [gap]** — sqlx is used in its **runtime** form (`sqlx::query`/
+  `query_as::<_,T>`, no `query!` macros), so builds need no DB and no cache. The documented target
+  (`plans/006-rust-backend-port.md:230-240`) is to adopt compile-time `query!` + commit the **`.sqlx`
+  offline cache** (`cargo sqlx prepare`) so CI/Railway build without a DB; a schema change then means
+  regenerate-and-commit the cache, drift-guarded like the above. (`BE-0018`, ledgered — the compiler
+  enforces `query!` call sites are valid where they're used; it can't enforce that runtime `sqlx::query`
+  was never chosen instead.)
 - **OPS-0003 [check]** — Parity harnesses are dev tools, not committed artifacts: `parity.sh` boots the
   Go oracle + Rust server against the same dev tunnel, mints a Clerk token, and deep-diffs every route's
   JSON (`app/api/scripts/parity.sh`); `record-goldens.sh` captures Go responses into `tests/goldens/`.
@@ -192,6 +198,20 @@ Full conventions live in `backend/`/`frontend/`; the process rules:
   path is `docker compose up --build` against multi-stage Dockerfiles (`docker-compose.yml`;
   `app/api/Dockerfile`).
 
+## Deviation journal
+
+- **OPS-0014 [review]** — Every `midas.toml [deviations]` entry has a **tracked path to
+  resolution**, not just a reason frozen at ledger time. A `ledgered`/`advisory` escape records *why*
+  a rule is violated right now (`BE-0018`'s reason cites the concrete migration blocker); the journal
+  is where *when it gets fixed* lives, since `midas.toml` itself has no room for that. Reference
+  implementation: midian's `plans/midas-conformance-journal.md` — one line per landed change or
+  decision, a `MORNING TODO:` marker on anything deferred, safe to resume a session from git history
+  plus that file alone. **In scope:** the journal-as-ledger-memory discipline. **Out of scope:** the
+  overnight-unattended-loop machinery that happens to write it in midian — that's a workflow choice,
+  not a convention; a repo can keep this journal by hand in a normal session. No mechanical check:
+  whether an entry's resolution path is actually tracked (versus just asserted) is a judgment call for
+  the reviewer, not a grep.
+
 ## Catalog (additions to `registry/conventions.json`)
 
 OPS-0001..0004 are defined in `README.md`; this doc adds:
@@ -207,7 +227,8 @@ OPS-0001..0004 are defined in `README.md`; this doc adds:
 | OPS-0011 | Husky + lint-staged pre-commit not bypassed (`--no-verify`). | review | hard |
 | OPS-0012 | Never commit `.env.local`/secrets; rotate on leak; never force-push `main`/`dev`. | check | hard |
 | OPS-0013 | Native ships via manual fastlane `workflow_dispatch`; static SPA via `CAPACITOR_BUILD`; build no. = commit count. | review | ledgered (web-only) |
+| OPS-0014 | Every `[deviations]` entry has a tracked path to resolution in a conformance journal. | review | advisory |
 
-> IDs are stable once published. The **[gap]** entries (Rust CI job, OpenAPI/TS + `.sqlx` commit-and-
-> guard, web test/build gates) are the standard's near-term target, not current enforcement —
-> `midas check`/`gen` should close them.
+> IDs are stable once published. The **[gap]** entries (OpenAPI/TS regenerate-and-diff CI guard,
+> `.sqlx` commit-and-guard, web test/build gates) are the standard's near-term target, not current
+> enforcement — `midas check`/`gen` should close them.

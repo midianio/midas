@@ -18,11 +18,17 @@ fn write(root: &Path, rel: &str, body: &str) {
 }
 
 /// A fixture that conforms to the mechanized checks (state dir present, no banned calls, agent
-/// docs synced — AGT-0001).
+/// docs synced — AGT-0001; the OpenAPI/TS-client pair committed — BE-0014/FE-0006/OPS-0003).
 fn clean_fixture(root: &Path) {
     fs::create_dir_all(root.join("app/web/src/lib/state")).unwrap();
     write(root, "app/web/src/lib/utils.ts", "export const x = 1;\n");
     write(root, "app/api/src/main.rs", "fn main() {}\n");
+    write(root, "app/api/openapi.json", "{}\n");
+    write(
+        root,
+        "app/web/src/lib/types/api.generated.ts",
+        "export type paths = {};\n",
+    );
     midas().current_dir(root).arg("sync").assert().success();
 }
 
@@ -163,8 +169,6 @@ fn expected_failure_is_never_silent() {
 fn check_ledgered_deviation_is_not_a_failure() {
     let dir = tempfile::tempdir().unwrap();
     clean_fixture(dir.path());
-    // FE-0006 is `ledgered`; but to exercise the ledger we need a checkable+ledgered rule. None
-    // ship a banned-call yet, so instead assert that a clean repo with deviations still passes.
     write(
         dir.path(),
         "midas.toml",
@@ -175,6 +179,172 @@ fn check_ledgered_deviation_is_not_a_failure() {
         .arg(dir.path())
         .assert()
         .success();
+}
+
+#[test]
+fn check_artifact_hash_ledgered_vs_hard() {
+    // BE-0014/FE-0006 are `ledgered` (an unledgered violation still fails, but a ledgered one
+    // doesn't); OPS-0003 covers the same pair as `hard` (no escape) — real exercise of both paths
+    // now that artifact-hash actually runs instead of being reported `Skipped`.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    fs::remove_file(dir.path().join("app/api/openapi.json")).unwrap();
+    fs::remove_file(dir.path().join("app/web/src/lib/types/api.generated.ts")).unwrap();
+    write(
+        dir.path(),
+        "midas.toml",
+        "[standard]\nversion = \"0.4.1\"\n\
+         [stack]\nbackend = { current = \"rust\" }\nfrontend = { current = \"svelte\" }\n\
+         [deviations]\n\"BE-0014\" = \"no contract yet\"\n\"FE-0006\" = \"no contract yet\"\n",
+    );
+
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "OPS-0003 is hard — still fails");
+
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let outcome = |id: &str| -> String {
+        v["mechanical"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()["outcome"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(outcome("BE-0014"), "ledgered");
+    assert_eq!(outcome("FE-0006"), "ledgered");
+    assert_eq!(outcome("OPS-0003"), "fail");
+}
+
+#[test]
+fn check_artifact_hash_service_profile_skips_frontend_side() {
+    // A backend-only project (no [stack.frontend]) can't be required to commit a frontend TS
+    // client that has no reason to exist — the frontend half of the pair is n/a, not missing.
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "app/api/src/main.rs", "fn main() {}\n");
+    write(dir.path(), "app/api/openapi.json", "{}\n");
+    write(
+        dir.path(),
+        "midas.toml",
+        "[standard]\nversion = \"0.4.1\"\n[stack]\nbackend = { current = \"rust\" }\n",
+    );
+    midas()
+        .current_dir(dir.path())
+        .arg("sync")
+        .assert()
+        .success();
+
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let be0014 = v["mechanical"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "BE-0014")
+        .unwrap();
+    assert_eq!(
+        be0014["outcome"], "pass",
+        "backend-only: frontend side is n/a, not missing"
+    );
+}
+
+#[test]
+fn check_canon_context_frontmatter_and_size_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    // Root AGENTS.md (written by `sync` in clean_fixture) already carries frontmatter and is exempt
+    // from the line cap regardless of length. A nested AGENTS.md needs its own frontmatter and is
+    // capped at 80 lines.
+    write(
+        dir.path(),
+        "app/api/AGENTS.md",
+        "---\nowner: x\nlast_reviewed: 2026-01-01\ncanon: true\n---\n\n# api\n",
+    );
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "conformant AGENTS.md pair passes");
+
+    // Now add a nested AGENTS.md with no frontmatter, another that's over the line cap, and a
+    // root-canon doc that has owner/last_reviewed but is missing `canon: true`.
+    write(
+        dir.path(),
+        "app/web/AGENTS.md",
+        "# web\n\nno frontmatter here\n",
+    );
+    let long_body = "line\n".repeat(90);
+    write(
+        dir.path(),
+        "db/AGENTS.md",
+        &format!("---\nowner: x\nlast_reviewed: 2026-01-01\ncanon: true\n---\n\n{long_body}"),
+    );
+    write(
+        dir.path(),
+        "docs/ARCHITECTURE.md",
+        "---\nowner: x\nlast_reviewed: 2026-01-01\n---\n\n# arch\n",
+    );
+
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let agt0009 = v["mechanical"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "AGT-0009")
+        .unwrap();
+    let findings: Vec<String> = agt0009["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| {
+            format!(
+                "{}:{}",
+                f["file"].as_str().unwrap(),
+                f["text"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.contains("app/web/AGENTS.md") && f.contains("owner")),
+        "missing owner on app/web/AGENTS.md: {findings:?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.contains("db/AGENTS.md") && f.contains("exceeds")),
+        "line-cap violation on db/AGENTS.md: {findings:?}"
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.contains("docs/ARCHITECTURE.md") && f.contains("canon: true")),
+        "missing canon: true on docs/ARCHITECTURE.md: {findings:?}"
+    );
+    // SKILL.md carries name+description, not canon: true — it isn't in canon_true_globs, so a
+    // missing `canon` key there must never be flagged.
+    assert!(
+        !findings.iter().any(|f| f.contains("SKILL.md")),
+        "no SKILL.md fixture exists; canon-context must not invent findings for it: {findings:?}"
+    );
 }
 
 #[test]
@@ -921,6 +1091,12 @@ fn adopt_clean_tree_exits_zero() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("app/web/src/lib/state")).unwrap();
     write(dir.path(), "app/api/src/main.rs", "fn main() {}\n");
+    write(dir.path(), "app/api/openapi.json", "{}\n");
+    write(
+        dir.path(),
+        "app/web/src/lib/types/api.generated.ts",
+        "export type paths = {};\n",
+    );
     midas()
         .args(["adopt", "--profile", "app", "-y", "--root"])
         .arg(dir.path())

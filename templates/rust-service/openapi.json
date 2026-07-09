@@ -1,0 +1,63 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "{{NAME}} API", "version": "0.1.0" },
+  "paths": {
+    "/items": {
+      "get": {
+        "tags": ["items"],
+        "operationId": "listItems",
+        "security": [{ "clerk_jwt": [] }],
+        "responses": {
+          "200": {
+            "description": "List items for the authenticated user",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApiResponse_Vec_Item" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid auth",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/ErrorBody" } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Item": {
+        "type": "object",
+        "required": ["id", "userId", "createdAt"],
+        "properties": {
+          "id": { "type": "string" },
+          "userId": { "type": "string" },
+          "createdAt": { "type": "integer", "format": "int64" }
+        }
+      },
+      "ApiResponse_Vec_Item": {
+        "type": "object",
+        "required": ["data", "code", "timestamp", "count"],
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/Item" } },
+          "code": { "type": "integer" },
+          "timestamp": { "type": "string" },
+          "count": { "type": "integer" }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "required": ["status", "code"],
+        "properties": {
+          "status": { "type": "integer" },
+          "code": { "type": "string" }
+        }
+      }
+    },
+    "securitySchemes": {
+      "clerk_jwt": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }
+    }
+  }
+}
