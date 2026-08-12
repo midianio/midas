@@ -109,9 +109,9 @@ The flow is a CLI, not a wiki page: `start` → commit → `sync` → `pr` → s
   from GitHub PR review** — it's a separate manual click. On merge, CI deploys the DR and deletes the
   pscale branch. The legacy Go `db/cmd/migrate` binary is retired; `midas migrate` is the single runner
   for both local dev and CI.
-- **OPS-0009 [review]** — Clean up paired pscale branches: `midas flow end [--force]`. `--force` deletes
-  the derived paired branch when it exists (nothing to delete on a git-only flow), and a hardcoded
-  protected-set (`main`/`dev`/parent) can never be deleted by any code path
+- **OPS-0009 [review]** — Clean up paired pscale branches: `midas flow end [--delete-data]`.
+  `--delete-data` deletes the derived paired branch when it exists (nothing to delete on a git-only
+  flow), and a hardcoded protected-set (`main`/`dev`/parent) can never be deleted by any code path
   (`internal/cmd/db.go:114-133`; `internal/flow/pscale.go:75-93`).
 - **OPS-0004 [review]** — Destructive prod data ops (TRUNCATE/DELETE/DROP, manual deploys) are handed
   to a human with the exact commands — tooling and agents never execute them. `midas migrate` is
