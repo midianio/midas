@@ -245,6 +245,297 @@ impl Scanner {
         }
         findings
     }
+
+    /// The DOC family (`DOC-0001`..`DOC-0004`). One kind, four `rule`s, because the four ids carry
+    /// different escapes but share the parse: a doc's identity is its filename, its state is its
+    /// frontmatter, and the two must agree.
+    ///
+    /// `kind` and the per-kind contract are fixed by the standard — lifecycle means the same thing
+    /// in every repo. `scopes` is the repo's own subsystem vocabulary, from `[docs] scopes`.
+    pub fn doc_lifecycle(
+        &mut self,
+        rule: &str,
+        root: &str,
+        scopes: &[String],
+        exclude: &[String],
+        code_globs: &[String],
+    ) -> Result<Vec<Finding>> {
+        if rule == "citations" {
+            return self.doc_citations(root, code_globs, exclude);
+        }
+        // A repo that declares no scopes has not opted in; DOC has nothing to say about it.
+        if scopes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let docs_glob = build_globset(&[format!("{root}/**/*.md"), format!("{root}/**/*.html")])?;
+        let exclude_set = build_globset(exclude)?;
+        let mut findings = Vec::new();
+
+        for rel in self.matching_files(&docs_glob, &exclude_set) {
+            let rel_str = rel_slash(&rel);
+            let base = rel
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let dir = rel
+                .parent()
+                .map(rel_slash)
+                .unwrap_or_default()
+                .trim_start_matches(root)
+                .trim_matches('/')
+                .to_string();
+
+            let Some(name) = DocName::parse(&base, scopes) else {
+                if rule == "encoding" {
+                    findings.push(Finding {
+                        file: rel_str,
+                        line: 0,
+                        text: format!(
+                            "name must be <kind>.<scope>.<slug>[.YYYY-MM-DD].md — kind ∈ {}, scope ∈ {}",
+                            KINDS.join("|"),
+                            scopes.join("|")
+                        ),
+                    });
+                }
+                continue;
+            };
+            let Some(content) = self.content(&rel).map(str::to_string) else {
+                continue;
+            };
+            let fm = frontmatter_map(&content);
+
+            match rule {
+                "encoding" => {
+                    let want_dir = dir_for_kind(name.kind);
+                    if dir != want_dir {
+                        findings.push(Finding {
+                            file: rel_str.clone(),
+                            line: 0,
+                            text: format!(
+                                "a '{}' belongs in {root}/{want_dir} (found in {root}/{dir})",
+                                name.kind
+                            ),
+                        });
+                    }
+                    let dated = matches!(name.kind, "adr" | "note");
+                    if dated && name.date.is_none() {
+                        findings.push(Finding {
+                            file: rel_str.clone(),
+                            line: 0,
+                            text: format!("a '{}' is point-in-time — its name needs a .YYYY-MM-DD. date", name.kind),
+                        });
+                    }
+                    if !dated && name.date.is_some() {
+                        findings.push(Finding {
+                            file: rel_str.clone(),
+                            line: 0,
+                            text: format!(
+                                "a '{}' is a living doc — no date in the name (state lives in frontmatter)",
+                                name.kind
+                            ),
+                        });
+                    }
+                    if base.ends_with(".md") {
+                        for (key, want) in [("kind", name.kind), ("scope", name.scope.as_str())] {
+                            match fm.get(key) {
+                                Some(got) if got == want => {}
+                                Some(got) => findings.push(Finding {
+                                    file: rel_str.clone(),
+                                    line: 0,
+                                    text: format!("frontmatter {key} '{got}' disagrees with the filename '{want}'"),
+                                }),
+                                None => findings.push(Finding {
+                                    file: rel_str.clone(),
+                                    line: 0,
+                                    text: format!("missing '{key}' in frontmatter"),
+                                }),
+                            }
+                        }
+                    }
+                }
+                "frontmatter" => {
+                    if !base.ends_with(".md") {
+                        continue;
+                    }
+                    for key in required_keys(name.kind) {
+                        if !fm.contains_key(*key) {
+                            findings.push(Finding {
+                                file: rel_str.clone(),
+                                line: 0,
+                                text: format!("missing '{key}' in frontmatter"),
+                            });
+                        }
+                    }
+                    match fm.get("status") {
+                        Some(s) if statuses(name.kind).contains(&s.as_str()) => {}
+                        Some(s) => findings.push(Finding {
+                            file: rel_str.clone(),
+                            line: 0,
+                            text: format!(
+                                "status '{s}' is not legal for a '{}' — expected {}",
+                                name.kind,
+                                statuses(name.kind).join("|")
+                            ),
+                        }),
+                        None => {}
+                    }
+                    if fm.get("canon").map(String::as_str) == Some("true")
+                        && frontmatter_list(&content, "sources").is_empty()
+                    {
+                        findings.push(Finding {
+                            file: rel_str.clone(),
+                            line: 0,
+                            text: "a canon doc must declare 'sources:' — what it describes, so drift is checkable".into(),
+                        });
+                    }
+                }
+                "drift" => {
+                    if fm.get("canon").map(String::as_str) != Some("true") {
+                        continue;
+                    }
+                    let Some(reviewed) = fm.get("last_reviewed") else {
+                        continue;
+                    };
+                    for src in frontmatter_list(&content, "sources") {
+                        if let Some(changed) = self.last_change(&src) {
+                            if changed.as_str() > reviewed.as_str() {
+                                findings.push(Finding {
+                                    file: rel_str.clone(),
+                                    line: 0,
+                                    text: format!(
+                                        "'{src}' changed {changed}, after last_reviewed {reviewed} — re-read it, then bump the date"
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(findings)
+    }
+
+    /// `DOC-0003` — source files may cite `ref`/`adr` docs, never a plan or an archived note. Those
+    /// two move by design, so a comment pointing at one is a dangling reference waiting to happen.
+    fn doc_citations(
+        &mut self,
+        root: &str,
+        code_globs: &[String],
+        exclude: &[String],
+    ) -> Result<Vec<Finding>> {
+        let globs = build_globset(code_globs)?;
+        let empty = build_globset(exclude)?;
+        let needles = [format!("{root}/plans/"), format!("{root}/archive/")];
+        let mut findings = Vec::new();
+        for rel in self.matching_files(&globs, &empty) {
+            let rel_str = rel_slash(&rel);
+            let Some(content) = self.content(&rel) else {
+                continue;
+            };
+            for (i, line) in content.lines().enumerate() {
+                if let Some(hit) = needles.iter().find(|n| line.contains(n.as_str())) {
+                    findings.push(Finding {
+                        file: rel_str.clone(),
+                        line: i as u32 + 1,
+                        text: format!("cites {hit}… — code may only cite {root}/ref.* or {root}/decisions/"),
+                    });
+                    break;
+                }
+            }
+        }
+        Ok(findings)
+    }
+
+    /// Last commit date (`YYYY-MM-DD`) touching a pathspec, or `None` outside a git repo / for a
+    /// path with no history. Glob magic is explicit so `**` means what the frontmatter says.
+    fn last_change(&self, pathspec: &str) -> Option<String> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.root)
+            .args(["log", "-1", "--format=%cs", "--"])
+            .arg(format!(":(glob){pathspec}"))
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let date = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (date.len() == 10).then_some(date)
+    }
+}
+
+/// The fixed lifecycle vocabulary. Repos vary in what they *have* (`scope`); they do not vary in
+/// what a document can *be*.
+const KINDS: [&str; 4] = ["ref", "adr", "plan", "note"];
+
+fn dir_for_kind(kind: &str) -> &'static str {
+    match kind {
+        "adr" => "decisions",
+        "plan" => "plans",
+        "note" => "archive",
+        _ => "",
+    }
+}
+
+fn statuses(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "ref" => &["current", "needs-review"],
+        "adr" => &["accepted", "superseded"],
+        "plan" => &["draft", "in-flight", "shipped", "abandoned"],
+        _ => &["historical"],
+    }
+}
+
+fn required_keys(kind: &str) -> &'static [&'static str] {
+    match kind {
+        "ref" => &["kind", "scope", "status", "owner", "last_reviewed"],
+        "adr" => &["kind", "scope", "status", "owner", "decided"],
+        "plan" => &["kind", "scope", "status", "owner"],
+        _ => &["kind", "scope", "status", "owner", "recorded"],
+    }
+}
+
+/// A parsed `<kind>.<scope>.<slug>[.<YYYY-MM-DD>].<ext>` filename.
+struct DocName {
+    kind: &'static str,
+    scope: String,
+    date: Option<String>,
+}
+
+impl DocName {
+    fn parse(base: &str, scopes: &[String]) -> Option<DocName> {
+        let stem = base.strip_suffix(".md").or_else(|| base.strip_suffix(".html"))?;
+        let parts: Vec<&str> = stem.split('.').collect();
+        if parts.len() < 3 {
+            return None;
+        }
+        let kind = KINDS.iter().find(|k| **k == parts[0])?;
+        let scope = scopes.iter().find(|s| *s == parts[1])?.clone();
+        let last = parts[parts.len() - 1];
+        let date = is_iso_date(last).then(|| last.to_string());
+        // slug must be non-empty once kind, scope and any date are removed
+        let slug_parts = parts.len() - 2 - usize::from(date.is_some());
+        if slug_parts == 0 {
+            return None;
+        }
+        Some(DocName {
+            kind,
+            scope,
+            date,
+        })
+    }
+}
+
+fn is_iso_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b.iter()
+            .enumerate()
+            .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
 }
 
 /// A relative path as a forward-slashed string — registry globs use `/`, and findings must render
@@ -279,6 +570,45 @@ fn frontmatter_map(content: &str) -> std::collections::HashMap<String, String> {
         }
     }
     kv
+}
+
+/// Values of a frontmatter list key, in either YAML shape a human actually writes:
+/// a block list (`sources:` then `  - glob`) or an inline array (`sources: [a, b]`).
+/// [`frontmatter_map`] is single-line only and drops both, so DOC-0004 needs its own reader.
+fn frontmatter_list(content: &str, key: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut lines = content.lines();
+    if lines.next() != Some("---") {
+        return out;
+    }
+    let mut in_key = false;
+    for line in lines {
+        if line.trim() == "---" {
+            break;
+        }
+        if let Some(rest) = line.strip_prefix(&format!("{key}:")) {
+            let rest = rest.trim();
+            if let Some(inner) = rest.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+                out.extend(
+                    inner
+                        .split(',')
+                        .map(|v| v.trim().trim_matches(['"', '\'']).to_string())
+                        .filter(|v| !v.is_empty()),
+                );
+                return out;
+            }
+            in_key = rest.is_empty();
+            continue;
+        }
+        if in_key {
+            let t = line.trim();
+            match t.strip_prefix("- ") {
+                Some(v) => out.push(v.trim().trim_matches(['"', '\'']).to_string()),
+                None => in_key = false,
+            }
+        }
+    }
+    out
 }
 
 fn build_globset(patterns: &[String]) -> Result<GlobSet> {

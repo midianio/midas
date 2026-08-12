@@ -1,11 +1,16 @@
 # midas governs itself (SPEC §9: dogfooding is the test).
 [standard]
-version = "0.5.0"
+version = "0.6.0"
 profile = "cli"
 
 [stack]
 # A CLI/tooling repo: no frontend/backend app layers, so those conventions are N/A here.
 cli = { current = "rust" }
+
+# DOC family: this repo's scope vocabulary. `kind` is fixed by the standard; `scope` is ours.
+# Declaring scopes is what opts a repo into DOC-0001..0004.
+[docs]
+scopes = ["repo", "cli"]
 
 [flow]
 # This repo's trunk is `main` (standalone; no dev/pscale split).

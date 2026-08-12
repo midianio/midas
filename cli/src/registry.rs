@@ -121,6 +121,33 @@ pub enum CheckSpec {
         #[serde(default)]
         max_lines: Option<u32>,
     },
+    /// The DOC family: `docs/<kind>.<scope>.<slug>[.<YYYY-MM-DD>].md`, where the directory encodes
+    /// lifecycle and the filename encodes identity. One spec, four `rule`s, because DOC-0001..0004
+    /// share the parse but carry different escapes:
+    ///
+    /// - `encoding`    — name grammar, directory↔kind, date presence, frontmatter agrees (DOC-0001)
+    /// - `frontmatter` — required keys per kind, legal status, `canon` implies `sources` (DOC-0002)
+    /// - `citations`   — source files may cite `ref`/`adr` docs only (DOC-0003)
+    /// - `drift`       — a canon doc whose `sources` moved after `last_reviewed` (DOC-0004)
+    ///
+    /// `scope` is not listed here: it is the repo's own vocabulary, read from `[docs] scopes`. A
+    /// repo that declares none has not opted in, and every rule evaluates empty.
+    DocLifecycle {
+        rule: String,
+        #[serde(default = "default_docs_root")]
+        root: String,
+        /// Paths inside `root` that DOC does not own. `AGENTS.md` at any depth stays AGT-0009's
+        /// (it is an instruction file, not documentation); `README.md` is a rendered entry point.
+        #[serde(default)]
+        exclude: Vec<String>,
+        /// `citations` only: which source files are scanned for doc references.
+        #[serde(default)]
+        code_globs: Vec<String>,
+    },
+}
+
+fn default_docs_root() -> String {
+    "docs".to_string()
 }
 
 /// One half of an [`CheckSpec::ArtifactHash`] pair. `Real` is the checkable 0.5.0+ shape — a glob,
