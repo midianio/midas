@@ -339,6 +339,32 @@ pub fn outcome_of(
                 Err(e) => return eval(Outcome::Skipped, vec![], Some(format!("check error: {e}"))),
             }
         }
+        CheckSpec::DocLifecycle {
+            rule,
+            root,
+            exclude,
+            code_globs,
+        } => {
+            // Repo-relative by construction: the docs layer has no `[layout]` mapping, so the
+            // corpus lives at `root` and only there.
+            if manifest.docs.scopes.is_empty() {
+                return eval(
+                    Outcome::Skipped,
+                    vec![],
+                    Some("no `[docs] scopes` declared — repo has not opted into DOC".into()),
+                );
+            }
+            match scanner.doc_lifecycle(
+                rule,
+                root,
+                &manifest.docs.scopes,
+                exclude,
+                code_globs,
+            ) {
+                Ok(f) => (f, None),
+                Err(e) => return eval(Outcome::Skipped, vec![], Some(format!("check error: {e}"))),
+            }
+        }
     };
 
     if findings.is_empty() {

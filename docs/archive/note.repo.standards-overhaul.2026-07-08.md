@@ -1,3 +1,11 @@
+---
+kind: note
+scope: repo
+status: historical
+owner: matt
+recorded: 2026-07-08
+---
+
 # Spec: Standards overhaul → midas 0.5.0
 
 Status: approved (docket ruled 2026-07-08)
@@ -37,7 +45,7 @@ in for codification, four go to backlog.
 | H2 | BE-0012 documented as clippy, executes as grep | **Re-document**: "grep in `midas check`, clippy in CI" — do not duplicate clippy in the CLI |
 | H3 | FE-0001 dir-exists check implies more than it verifies | **Honest split**: keep the cheap structural check, registry re-describes it as a proxy; the singleton pattern is explicitly the review-tier half |
 | G1 | GitNexus pre-edit impact analysis + `detect_changes` before commit (midian CLAUDE.md hard rules) | **New AGT convention, `hard` escape** (review-tier) |
-| G2 | Conformance-journal discipline (`plans/midas-conformance-journal.md`): ledgered deviations tracked to resolution | **New OPS convention** — codify the journal, not the overnight loop |
+| G2 | Conformance-journal discipline (midian's conformance journal, now `docs/archive/note.repo.midas-conformance-journal.2026-07-09.md`): ledgered deviations tracked to resolution | **New OPS convention** — codify the journal, not the overnight loop |
 | G3 | Per-domain skill bundle (`error-handling`, `testing`, `release`, `security-fix`, …) built locally in midian; `agents.md` still says "planned" | **New AGT convention**: required skill set and shape |
 | G4 | AGENTS.md frontmatter (`owner`/`last_reviewed`/`canon`) + 80-line cap on nested files; enforced by midian's `context-scan.sh --ci`, mentioned in `process.md` with no ID | **New convention with an ID** (tier: check if a cheap mechanical check is feasible, else review) |
 | G5–G8 | Harness config, ubiquitous-language doc, OTA/CalVer gating, CI-runner/vector/storage seams | **Backlog** — one candidate-convention issue each on midas, no convention in 0.5.0 |

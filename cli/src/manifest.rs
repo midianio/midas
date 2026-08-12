@@ -27,6 +27,11 @@ pub struct Manifest {
     pub layout: BTreeMap<String, String>,
     #[serde(default)]
     pub check: CheckCfg,
+    /// `[docs]` — the repo's own scope vocabulary for the DOC family. `kind` is fixed by the
+    /// standard (lifecycle means the same thing everywhere); `scope` names this repo's subsystems,
+    /// so it can't be.
+    #[serde(default)]
+    pub docs: DocsCfg,
     #[serde(default)]
     pub flow: FlowCfg,
     /// `midas dev` orchestration: the concurrent process set + the optional pscale tunnel.
@@ -67,6 +72,15 @@ pub struct CheckCfg {
     /// belong in the org registry (e.g. midian's sharelink service inlining uuid, BE-0016).
     #[serde(default)]
     pub allow: BTreeMap<String, Vec<String>>,
+}
+
+/// `[docs]` — configuration for the DOC family (`docs/<kind>.<scope>.<slug>[.<date>].md`).
+#[derive(Debug, Deserialize, Default)]
+pub struct DocsCfg {
+    /// This repo's scope vocabulary — the second filename field. A repo with no `docs/` can leave
+    /// it empty; DOC then has nothing to check. Declaring it is what opts a repo in.
+    #[serde(default)]
+    pub scopes: Vec<String>,
 }
 
 /// `[flow]` overrides for the ported release flow. Every field is optional; omitted fields fall

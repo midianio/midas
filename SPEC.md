@@ -52,7 +52,7 @@ conventions wearing a hat. **prayer** is what converts midian's conventions into
 to ledger. And because prayer is Go→Rust like midian, the **migration playbook becomes a reusable
 artifact** ([`standards/playbooks/go-to-rust.md`](./standards/playbooks/)), validated by its second run.
 
-**Backend (Rust).** Six battle-tested docs in `midian/plans/rust-port/standards/`, live-diff-verified
+**Backend (Rust).** Six battle-tested docs lifted from midian (now its `docs/ref.api.*`), live-diff-verified
 against the Go oracle on Vitess: one `AppError` + one wire envelope; central auth (`RequireAuth`),
 authz (`access::require`), feature-gating (`RequirePlan`/`usage::guard`); two-tier vendor-neutral
 observability; `AppState` shared-infra seams (pooled HTTP, task tracker, `with_tx`, `ids`); a

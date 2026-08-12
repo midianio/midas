@@ -233,6 +233,18 @@ fn spec_line(spec: &CheckSpec) -> String {
                 globs.join(", ")
             )
         }
+        CheckSpec::DocLifecycle {
+            rule, root, ..
+        } => {
+            let what = match rule.as_str() {
+                "encoding" => "names match <kind>.<scope>.<slug>[.date].md, sit in the directory their kind implies, and agree with their frontmatter",
+                "frontmatter" => "required keys per kind, a legal status, and `sources` on anything canon",
+                "citations" => "source files cite ref/ or decisions/ docs only — never a plan or an archived note",
+                "drift" => "a canon doc whose declared `sources` changed after its `last_reviewed`",
+                other => other,
+            };
+            format!("doc-lifecycle ({rule}) over {root}/: {what}")
+        }
     }
 }
 

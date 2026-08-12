@@ -41,6 +41,19 @@ pub fn module(
     add_module(ctx, &repo_root(), name, dir, no_wire, force)
 }
 
+/// `touch doc` — a conformant document (DOC-0001/0002): right name, right directory, right
+/// frontmatter for its kind. Scaffolding is the only way a new doc starts life conformant, since
+/// the encoding is not something you can half-remember (AGT-0002).
+pub fn doc(
+    ctx: &Ctx,
+    kind: Option<String>,
+    scope: Option<String>,
+    slug: Option<String>,
+    force: bool,
+) -> CliResult {
+    add_doc(ctx, &repo_root(), kind, scope, slug, force)
+}
+
 fn repo_root() -> PathBuf {
     crate::proc::capture("git", &["rev-parse", "--show-toplevel"])
         .map(PathBuf::from)
@@ -127,6 +140,121 @@ fn add_migration(
             rel.clone()
         });
     Ok(())
+}
+
+fn add_doc(
+    ctx: &Ctx,
+    root: &std::path::Path,
+    kind: Option<String>,
+    scope: Option<String>,
+    slug: Option<String>,
+    force: bool,
+) -> CliResult {
+    let kind = match kind {
+        Some(k) => k,
+        None => prompt_line(&ctx.out, &ctx.global, "Kind (ref|adr|plan|note)", None)?,
+    };
+    let kind = kind.trim().to_lowercase();
+    if !["ref", "adr", "plan", "note"].contains(&kind.as_str()) {
+        return Err(CliError::usage(format!(
+            "unknown kind '{kind}' — expected ref (current truth), adr (a frozen decision), plan (intent) or note (history)"
+        )));
+    }
+
+    // The repo's own vocabulary, not the standard's — see `[docs] scopes`.
+    let manifest = crate::manifest::Manifest::find(root)?.map(|(m, _)| m);
+    let scopes: Vec<String> = manifest.map(|m| m.docs.scopes).unwrap_or_default();
+    if scopes.is_empty() {
+        return Err(CliError::expected(
+            "no `[docs] scopes` in midas.toml — declare this repo's scope vocabulary to opt into DOC",
+        ));
+    }
+    let scope = match scope {
+        Some(s) => s,
+        None => prompt_line(
+            &ctx.out,
+            &ctx.global,
+            &format!("Scope ({})", scopes.join("|")),
+            None,
+        )?,
+    };
+    let scope = scope.trim().to_lowercase();
+    if !scopes.contains(&scope) {
+        return Err(CliError::usage(format!(
+            "unknown scope '{scope}' — this repo declares {}",
+            scopes.join("|")
+        )));
+    }
+
+    let raw = match slug {
+        Some(s) => s,
+        None => prompt_line(&ctx.out, &ctx.global, "Slug", None)?,
+    };
+    let slug = slugify(&raw);
+    if slug.is_empty() {
+        return Err(CliError::usage("slug must contain letters/digits"));
+    }
+
+    let today = crate::proc::capture("date", &["+%Y-%m-%d"]).unwrap_or_default();
+    let today = today.trim();
+    let dated = matches!(kind.as_str(), "adr" | "note");
+    let subdir = match kind.as_str() {
+        "adr" => "decisions",
+        "plan" => "plans",
+        "note" => "archive",
+        _ => "",
+    };
+    let name = if dated {
+        format!("{kind}.{scope}.{slug}.{today}.md")
+    } else {
+        format!("{kind}.{scope}.{slug}.md")
+    };
+    let rel = if subdir.is_empty() {
+        format!("docs/{name}")
+    } else {
+        format!("docs/{subdir}/{name}")
+    };
+    let path = root.join(&rel);
+    if path.exists() && !force {
+        return Err(CliError::expected(format!(
+            "{rel} already exists (pass --force)"
+        )));
+    }
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    std::fs::write(&path, doc_template(&kind, &scope, &slug, today))?;
+
+    ctx.out.success(format!("created {rel}"));
+    ctx.out.hint(match kind.as_str() {
+        "ref" => "a ref is current truth — being wrong is a bug; add `sources:` + `canon: true` if agents must trust it",
+        "adr" => "an adr is frozen at its date — supersede it, never edit it",
+        "plan" => "a plan holds design; the task list belongs in the tracker",
+        _ => "a note is a dated record — never edit it; correct the record with a newer one",
+    });
+    ctx.out.data(&json!({ "created": [rel], "kind": kind }), |_| {
+        rel.clone()
+    });
+    Ok(())
+}
+
+fn doc_template(kind: &str, scope: &str, slug: &str, today: &str) -> String {
+    let title = slug.replace('-', " ");
+    let title = title
+        .char_indices()
+        .map(|(i, c)| if i == 0 { c.to_ascii_uppercase() } else { c })
+        .collect::<String>();
+    let state = match kind {
+        "ref" => format!("status: current\nowner: TODO\nlast_reviewed: {today}"),
+        "adr" => format!("status: accepted\nowner: TODO\ndecided: {today}"),
+        "plan" => "status: draft\nowner: TODO".to_string(),
+        _ => format!("status: historical\nowner: TODO\nrecorded: {today}"),
+    };
+    let body = match kind {
+        "ref" => "\nWhat this describes, as it is today.\n\n## Seams\n\n## Gotchas\n",
+        "adr" => "\n## Context\n\nWhat forced a decision.\n\n## Decision\n\n## Consequences\n\nIncluding what this makes harder.\n",
+        "plan" => "\n## Goal\n\n## Approach\n\n## Open questions\n",
+        _ => "\nWhat was true on this date, and why it mattered.\n",
+    };
+    format!("---\nkind: {kind}\nscope: {scope}\n{state}\n---\n\n# {title}\n{body}")
 }
 
 fn add_component(

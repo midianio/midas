@@ -1,5 +1,5 @@
 {
-  "version": "0.5.0",
+  "version": "0.6.0",
   "conventions": [
     { "id": "STK-0001", "title": "Backend = Rust (axum 0.8 · tokio · sqlx 0.8 · utoipa).", "layer": "stack", "tier": "review", "escape": "ledgered", "doc": "stack.md" },
     { "id": "STK-0002", "title": "Frontend = SvelteKit 2 + Svelte 5 runes; package manager = Bun.", "layer": "stack", "tier": "review", "escape": "ledgered", "doc": "stack.md" },
@@ -100,8 +100,23 @@
     { "id": "AGT-0006", "title": "The semantic reviewer returns structured findings keyed to convention IDs.", "layer": "agent", "tier": "review", "escape": "hard", "doc": "agents.md" },
     { "id": "AGT-0007", "title": "Run impact analysis before editing a symbol; run detect_changes() before committing.", "layer": "agent", "tier": "review", "escape": "hard", "doc": "agents.md" },
     { "id": "AGT-0008", "title": "A conformant repo ships the required per-domain skill bundle, each a thin doc over standards/.", "layer": "agent", "tier": "review", "escape": "advisory", "doc": "agents.md" },
-    { "id": "AGT-0009", "title": "Canonical AGENTS.md/SKILL.md/ARCHITECTURE.md carry owner+last_reviewed frontmatter (root-canon docs also canon: true); nested AGENTS.md capped at 80 lines.", "layer": "agent", "tier": "check", "escape": "hard",
-      "check": { "kind": "canon-context", "globs": ["AGENTS.md", "**/AGENTS.md", ".claude/skills/**/SKILL.md", "docs/ARCHITECTURE.md", "docs/ubiquitous-language.md"], "exclude": [".claude/skills/gitnexus/**"], "canon_true_globs": ["AGENTS.md", "**/AGENTS.md", "docs/ARCHITECTURE.md", "docs/ubiquitous-language.md"], "capped_glob": "**/AGENTS.md", "max_lines": 80 },
-      "doc": "agents.md" }
+    { "id": "AGT-0009", "title": "Agent instruction files (AGENTS.md, SKILL.md) carry owner+last_reviewed frontmatter (AGENTS.md also canon: true); nested AGENTS.md capped at 80 lines.", "layer": "agent", "tier": "check", "escape": "hard",
+      "check": { "kind": "canon-context", "globs": ["AGENTS.md", "**/AGENTS.md", ".claude/skills/**/SKILL.md"], "exclude": [".claude/skills/gitnexus/**"], "canon_true_globs": ["AGENTS.md", "**/AGENTS.md"], "capped_glob": "**/AGENTS.md", "max_lines": 80 },
+      "doc": "agents.md" },
+    { "id": "DOC-0001", "title": "Docs are named <kind>.<scope>.<slug>[.YYYY-MM-DD].md, live in the directory their kind implies, and their frontmatter agrees with their filename.", "layer": "docs", "tier": "check", "escape": "hard",
+      "check": { "kind": "doc-lifecycle", "rule": "encoding", "root": "docs", "exclude": ["**/AGENTS.md", "**/README.md"] },
+      "doc": "docs.md" },
+    { "id": "DOC-0002", "title": "Every doc declares its state: required frontmatter keys per kind, a legal status, and sources on anything canon.", "layer": "docs", "tier": "check", "escape": "hard",
+      "check": { "kind": "doc-lifecycle", "rule": "frontmatter", "root": "docs", "exclude": ["**/AGENTS.md", "**/README.md"] },
+      "doc": "docs.md" },
+    { "id": "DOC-0003", "title": "Source files cite ref/ or decisions/ docs only \u2014 never a plan or an archived note.", "layer": "docs", "tier": "check", "escape": "ledgered",
+      "check": { "kind": "doc-lifecycle", "rule": "citations", "root": "docs", "exclude": ["**/tests/**", "tests/**", "**/*.test.*", "**/*.spec.*"], "code_globs": ["**/*.rs", "**/*.ts", "**/*.tsx", "**/*.svelte", "**/*.css", "**/*.js", "**/*.mjs", "**/*.go", "**/*.py", "**/*.sql"] },
+      "doc": "docs.md" },
+    { "id": "DOC-0004", "title": "A canon doc whose declared sources changed after its last_reviewed date is stale and must be re-read.", "layer": "docs", "tier": "check", "escape": "hard",
+      "check": { "kind": "doc-lifecycle", "rule": "drift", "root": "docs", "exclude": ["**/AGENTS.md", "**/README.md"] },
+      "doc": "docs.md" },
+    { "id": "DOC-0005", "title": "A shipped plan becomes a note or an adr, never a stale plan.", "layer": "docs", "tier": "review", "escape": "hard", "doc": "docs.md" },
+    { "id": "DOC-0006", "title": "docs/ root stays small enough to re-read in an hour; a swollen ref count means something is really a note.", "layer": "docs", "tier": "review", "escape": "advisory", "doc": "docs.md" },
+    { "id": "DOC-0007", "title": "Deleting beats archiving when git already has it; archive only what a reader would otherwise re-derive.", "layer": "docs", "tier": "review", "escape": "advisory", "doc": "docs.md" }
   ]
 }

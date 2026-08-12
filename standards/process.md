@@ -139,7 +139,7 @@ Lint/format/typecheck runs on every PR and on push to `main` (`.github/workflows
   `continue-on-error: true`, never blocks (`.github/workflows/midas.yml`).
 - **OPS-0002 [check] [gap]** — `bun run test` (turbo: vitest + Playright) and the dual-adapter web
   build (`vite build` and `CAPACITOR_BUILD=1 vite build`) are not gated in CI today; the planned
-  `plans/001-ci-test-gates.md` is where this lands.
+  midian's `docs/archive/note.repo.plan-001-ci-test-gates.2026-06-11.md` is where this landed.
 
 ## Generated artifacts — regenerate, commit, drift-guard
 
@@ -159,7 +159,7 @@ The contract is: anything generated from another source of truth is committed, a
   `db/gen`, below) isn't wired into CI yet — only the commit-status half is enforced today.
 - **OPS-0003 [check] [gap]** — sqlx is used in its **runtime** form (`sqlx::query`/
   `query_as::<_,T>`, no `query!` macros), so builds need no DB and no cache. The documented target
-  (`plans/006-rust-backend-port.md:230-240`) is to adopt compile-time `query!` + commit the **`.sqlx`
+  (midian's `docs/decisions/adr.api.rust-backend-port.2026-06-25.md`) is to adopt compile-time `query!` + commit the **`.sqlx`
   offline cache** (`cargo sqlx prepare`) so CI/Railway build without a DB; a schema change then means
   regenerate-and-commit the cache, drift-guarded like the above. (`BE-0018`, ledgered — the compiler
   enforces `query!` call sites are valid where they're used; it can't enforce that runtime `sqlx::query`
@@ -204,7 +204,7 @@ Full conventions live in `backend/`/`frontend/`; the process rules:
   resolution**, not just a reason frozen at ledger time. A `ledgered`/`advisory` escape records *why*
   a rule is violated right now (`BE-0018`'s reason cites the concrete migration blocker); the journal
   is where *when it gets fixed* lives, since `midas.toml` itself has no room for that. Reference
-  implementation: midian's `plans/midas-conformance-journal.md` — one line per landed change or
+  implementation: midian's `docs/archive/note.repo.midas-conformance-journal.2026-07-09.md` — one line per landed change or
   decision, a `MORNING TODO:` marker on anything deferred, safe to resume a session from git history
   plus that file alone. **In scope:** the journal-as-ledger-memory discipline. **Out of scope:** the
   overnight-unattended-loop machinery that happens to write it in midian — that's a workflow choice,
