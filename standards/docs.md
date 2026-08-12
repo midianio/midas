@@ -104,6 +104,11 @@ which launders staleness into the appearance of freshness and makes the signal w
 the one way to defeat this entry, and no check can catch it. That one is on the reviewer.
 
 Dates come from committed history, so a doc never fails for a change that hasn't landed.
+**CI needs full history.** Drift is computed from git log, so a shallow checkout (the
+`actions/checkout` default) can only see the head commit and would date every path to today. The
+check detects a shallow repository and reports nothing rather than inventing dates — so a CI job
+that wants this enforced must fetch full history (`fetch-depth: 0`). Silence here means "could not
+tell", not "clean".
 
 ## Adopting
 

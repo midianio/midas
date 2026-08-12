@@ -24,6 +24,8 @@ pub struct Scanner {
     root: PathBuf,
     files: Vec<PathBuf>, // relative to root
     cache: HashMap<PathBuf, Option<String>>,
+    /// Memoised `git rev-parse --is-shallow-repository`. `None` until first probed.
+    shallow: Option<bool>,
 }
 
 impl Scanner {
@@ -52,6 +54,7 @@ impl Scanner {
             root: root.to_path_buf(),
             files,
             cache: HashMap::new(),
+            shallow: None,
         })
     }
 
@@ -481,6 +484,12 @@ impl Scanner {
         let Some(reviewed) = fm.get("last_reviewed").cloned() else {
             return Vec::new();
         };
+        // A shallow clone has only the head commit, so every path would date to today and every
+        // doc reviewed earlier would "drift". Report nothing rather than something false — CI
+        // wanting this check must fetch full history (`fetch-depth: 0`).
+        if self.is_shallow() {
+            return Vec::new();
+        }
         let mut findings = Vec::new();
         for src in sources {
             if let Some(changed) = self.last_change(&src) {
@@ -517,6 +526,24 @@ impl Scanner {
             findings.extend(self.sources_drift(&rel_str, &content, require_sources));
         }
         Ok(findings)
+    }
+
+    /// Whether this working copy has truncated history. Drift is uncomputable if so.
+    fn is_shallow(&mut self) -> bool {
+        if let Some(known) = self.shallow {
+            return known;
+        }
+        let shallow = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.root)
+            .args(["rev-parse", "--is-shallow-repository"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
+            .unwrap_or(false);
+        self.shallow = Some(shallow);
+        shallow
     }
 
     /// Last commit date (`YYYY-MM-DD`) touching a pathspec, or `None` outside a git repo / for a
