@@ -374,13 +374,7 @@ pub fn outcome_of(
                     Some("no `[docs] scopes` declared — repo has not opted into DOC".into()),
                 );
             }
-            match scanner.doc_lifecycle(
-                rule,
-                root,
-                &manifest.docs.scopes,
-                exclude,
-                code_globs,
-            ) {
+            match scanner.doc_lifecycle(rule, root, &manifest.docs.scopes, exclude, code_globs) {
                 Ok(f) => (f, None),
                 Err(e) => return eval(Outcome::Skipped, vec![], Some(format!("check error: {e}"))),
             }

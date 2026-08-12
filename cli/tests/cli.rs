@@ -1418,7 +1418,8 @@ fn check_doc_lifecycle_encoding_and_frontmatter() {
         "frontmatter scope must agree with the filename: {enc:?}"
     );
     assert!(
-        !enc.iter().any(|f| f.contains("AGENTS.md") || f.contains("README.md")),
+        !enc.iter()
+            .any(|f| f.contains("AGENTS.md") || f.contains("README.md")),
         "AGENTS.md/README.md are not DOC's: {enc:?}"
     );
 
@@ -1508,7 +1509,10 @@ fn touch_doc_scaffolds_a_conformant_doc() {
     assert!(path.exists(), "scaffolded at the kind's directory");
     let body = fs::read_to_string(&path).unwrap();
     assert!(body.starts_with("---\nkind: ref\nscope: api\n"));
-    assert!(body.contains("last_reviewed:"), "a ref carries a review date");
+    assert!(
+        body.contains("last_reviewed:"),
+        "a ref carries a review date"
+    );
 
     // An unknown scope is a usage error, not a silently-wrong file.
     midas()
@@ -1577,11 +1581,19 @@ fn check_agt_source_drift_on_agent_docs() {
             .map(|a| a.as_slice())
             .unwrap_or(&[])
             .iter()
-            .map(|f| format!("{}:{}", f["file"].as_str().unwrap(), f["text"].as_str().unwrap()))
+            .map(|f| {
+                format!(
+                    "{}:{}",
+                    f["file"].as_str().unwrap(),
+                    f["text"].as_str().unwrap()
+                )
+            })
             .collect()
     };
     assert!(
-        findings(&v).iter().any(|f| f.contains("app/web/AGENTS.md") && f.contains("sources")),
+        findings(&v)
+            .iter()
+            .any(|f| f.contains("app/web/AGENTS.md") && f.contains("sources")),
         "a canon agent doc must declare sources: {:?}",
         findings(&v)
     );
