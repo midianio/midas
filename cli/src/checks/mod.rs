@@ -323,7 +323,10 @@ impl Scanner {
                         findings.push(Finding {
                             file: rel_str.clone(),
                             line: 0,
-                            text: format!("a '{}' is point-in-time — its name needs a .YYYY-MM-DD. date", name.kind),
+                            text: format!(
+                                "a '{}' is point-in-time — its name needs a .YYYY-MM-DD. date",
+                                name.kind
+                            ),
                         });
                     }
                     if !dated && name.date.is_some() {
@@ -419,7 +422,9 @@ impl Scanner {
                     findings.push(Finding {
                         file: rel_str.clone(),
                         line: i as u32 + 1,
-                        text: format!("cites {hit}… — code may only cite {root}/ref.* or {root}/decisions/"),
+                        text: format!(
+                            "cites {hit}… — code may only cite {root}/ref.* or {root}/decisions/"
+                        ),
                     });
                     break;
                 }
@@ -462,7 +467,9 @@ impl Scanner {
                 vec![Finding {
                     file: rel_str.to_string(),
                     line: 0,
-                    text: "declare 'sources:' — the globs this describes, so staleness is checkable".into(),
+                    text:
+                        "declare 'sources:' — the globs this describes, so staleness is checkable"
+                            .into(),
                 }]
             } else {
                 Vec::new()
@@ -567,7 +574,9 @@ struct DocName {
 
 impl DocName {
     fn parse(base: &str, scopes: &[String]) -> Option<DocName> {
-        let stem = base.strip_suffix(".md").or_else(|| base.strip_suffix(".html"))?;
+        let stem = base
+            .strip_suffix(".md")
+            .or_else(|| base.strip_suffix(".html"))?;
         let parts: Vec<&str> = stem.split('.').collect();
         if parts.len() < 3 {
             return None;
@@ -581,11 +590,7 @@ impl DocName {
         if slug_parts == 0 {
             return None;
         }
-        Some(DocName {
-            kind,
-            scope,
-            date,
-        })
+        Some(DocName { kind, scope, date })
     }
 }
 

@@ -251,9 +251,7 @@ fn spec_line(spec: &CheckSpec) -> String {
         CheckSpec::Unknown => {
             "unknown check kind — this midas build predates the registry; upgrade the CLI".into()
         }
-        CheckSpec::DocLifecycle {
-            rule, root, ..
-        } => {
+        CheckSpec::DocLifecycle { rule, root, .. } => {
             let what = match rule.as_str() {
                 "encoding" => "names match <kind>.<scope>.<slug>[.date].md, sit in the directory their kind implies, and agree with their frontmatter",
                 "frontmatter" => "required keys per kind, a legal status, and `sources` on anything canon",

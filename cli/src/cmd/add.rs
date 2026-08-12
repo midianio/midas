@@ -230,9 +230,8 @@ fn add_doc(
         "plan" => "a plan holds design; the task list belongs in the tracker",
         _ => "a note is a dated record — never edit it; correct the record with a newer one",
     });
-    ctx.out.data(&json!({ "created": [rel], "kind": kind }), |_| {
-        rel.clone()
-    });
+    ctx.out
+        .data(&json!({ "created": [rel], "kind": kind }), |_| rel.clone());
     Ok(())
 }
 
