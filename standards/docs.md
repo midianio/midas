@@ -84,6 +84,12 @@ which is exactly why they are the only legal citation targets.
 Ledgered rather than hard, because it is the one entry that can fail on a file nobody edited:
 archive a doc, and an untouched comment becomes a violation. A repo mid-cleanup can ledger it.
 
+**Applied migrations are exempt.** `db/migrations/**` is skipped, because the only way to satisfy
+this entry inside one would be to edit a migration that has already run — which `BE-0007` forbids
+outright, and which trips the runner's checksum guard. Where a `hard` convention and this one
+disagree, this one yields: a stale comment in a frozen file is a smaller problem than a schema
+history you can no longer replay.
+
 ## Drift (`DOC-0004` `[check]` `hard` on canon)
 
 A `canon: true` doc is stale when any glob in its `sources:` changed **after** its
