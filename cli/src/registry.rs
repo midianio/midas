@@ -144,6 +144,14 @@ pub enum CheckSpec {
         #[serde(default)]
         code_globs: Vec<String>,
     },
+    /// A `kind` this binary does not know — the registry on disk is newer than the CLI reading it.
+    ///
+    /// Evaluates `skipped` instead of failing the parse. Without this, adding a check kind breaks
+    /// the release itself: `flow tag` reads `registry/conventions.json` with the *previous*
+    /// release's parser, so the binary that ships version N can never cut version N+1. It also
+    /// keeps `midas drift` able to diff a snapshot that uses kinds this build predates.
+    #[serde(other)]
+    Unknown,
 }
 
 fn default_docs_root() -> String {

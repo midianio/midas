@@ -1517,3 +1517,35 @@ fn touch_doc_scaffolds_a_conformant_doc() {
         .assert()
         .failure();
 }
+
+#[test]
+fn registry_tolerates_check_kinds_this_build_does_not_know() {
+    // The release bootstrap: `flow tag` parses registry/conventions.json with the *previous*
+    // release's binary. If an unknown `kind` failed the parse, the binary shipping version N could
+    // never cut version N+1 — which is exactly what adding `doc-lifecycle` did to 0.5.0.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    write(
+        dir.path(),
+        "registry/conventions.json",
+        r#"{
+  "version": "99.0.0",
+  "conventions": [
+    { "id": "ZZZ-0001", "title": "A kind from the future.", "layer": "repo", "tier": "check", "escape": "hard",
+      "check": { "kind": "telepathy", "vibes": ["good"] },
+      "doc": "future.md" }
+  ]
+}"#,
+    );
+    // `drift` is the command that reads a registry file off disk.
+    let out = midas()
+        .current_dir(dir.path())
+        .args(["--json", "drift"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unknown variant"),
+        "an unknown check kind must not fail the parse: {stderr}"
+    );
+}

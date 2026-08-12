@@ -339,6 +339,14 @@ pub fn outcome_of(
                 Err(e) => return eval(Outcome::Skipped, vec![], Some(format!("check error: {e}"))),
             }
         }
+        // Registry newer than this binary — report, don't crash. See CheckSpec::Unknown.
+        CheckSpec::Unknown => {
+            return eval(
+                Outcome::Skipped,
+                vec![],
+                Some("check kind unknown to this midas build — upgrade the CLI".into()),
+            )
+        }
         CheckSpec::DocLifecycle {
             rule,
             root,

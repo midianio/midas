@@ -233,6 +233,9 @@ fn spec_line(spec: &CheckSpec) -> String {
                 globs.join(", ")
             )
         }
+        CheckSpec::Unknown => {
+            "unknown check kind — this midas build predates the registry; upgrade the CLI".into()
+        }
         CheckSpec::DocLifecycle {
             rule, root, ..
         } => {
