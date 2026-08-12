@@ -118,6 +118,36 @@ flags a missing key or an over-cap file. Reference implementation: midian's
 `scripts/context-scan.sh --ci` (this predates `AGT-0009`; `midas check` is the portable version of the
 same rule).
 
+## Staleness (`AGT-0010` `[check]`)
+
+`AGT-0009` proves a canon file *has* a `last_reviewed` date. It cannot prove the date is true, and
+a date nobody checks decays into decoration — which is how a canon doc ends up describing a
+subsystem that was deleted weeks earlier while passing every gate.
+
+`AGT-0010` closes that, with the contract `DOC-0004` already gives the docs corpus:
+
+- A `canon: true` agent doc (`AGENTS.md` at any depth, `SKILL.md`) declares **`sources:`** — the
+  globs it describes.
+- It is **stale** when any of those globs changed *after* its `last_reviewed`, at which point the
+  fix is to re-read it and then move the date.
+
+The trigger is **change, not the calendar**. A doc about untouched code is not stale however old it
+is; a doc about a module that moved yesterday is, however new. Calendar expiry fails PRs unrelated
+to the doc and rewards bumping the date without reading — which launders staleness into the
+appearance of freshness and is worse than no signal at all. Dates come from committed history, so
+nothing fails for a change that has not landed.
+
+Keep `sources:` **narrow**. `sources: ["**"]` fires on every commit and trains everyone to bump
+reflexively; if a doc genuinely describes everything, it is several docs.
+
+`ledgered`, not `hard`: unlike the rest of `AGT-0009`, this entry can fail on a file nobody edited,
+so a repo mid-adoption can record the debt (`midas deviate AGT-0010 --reason …`) instead of being
+blocked. `require_sources` also flags a canon file that never declared `sources:` — without it, the
+doc most likely to rot is the one that quietly opted out.
+
+**`last_reviewed` means someone re-read it.** Bumping it as a side effect of an unrelated edit is
+the one way to defeat this entry, and no check can catch it. That one is on the reviewer.
+
 ## The reviewer contract — delegated, out-of-process
 
 The `review`-tier conventions are enforced by **whatever review agent the team runs** (Cursor,

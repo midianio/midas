@@ -268,7 +268,7 @@ fn check_canon_context_frontmatter_and_size_cap() {
     write(
         dir.path(),
         "app/api/AGENTS.md",
-        "---\nowner: x\nlast_reviewed: 2026-01-01\ncanon: true\n---\n\n# api\n",
+        "---\nowner: x\nlast_reviewed: 2099-01-01\ncanon: true\nsources:\n  - app/api/src/**\n---\n\n# api\n",
     );
     let out = midas()
         .args(["--json", "check", "--root"])
@@ -288,7 +288,7 @@ fn check_canon_context_frontmatter_and_size_cap() {
     write(
         dir.path(),
         "db/AGENTS.md",
-        &format!("---\nowner: x\nlast_reviewed: 2026-01-01\ncanon: true\n---\n\n{long_body}"),
+        &format!("---\nowner: x\nlast_reviewed: 2099-01-01\ncanon: true\nsources:\n  - db/**\n---\n\n{long_body}"),
     );
 
     let out = midas()
@@ -1547,5 +1547,97 @@ fn registry_tolerates_check_kinds_this_build_does_not_know() {
     assert!(
         !stderr.contains("unknown variant"),
         "an unknown check kind must not fail the parse: {stderr}"
+    );
+}
+
+#[test]
+fn check_agt_source_drift_on_agent_docs() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+
+    // A canon agent doc with no `sources:` is silently exempt from the check that matters most.
+    write(
+        dir.path(),
+        "app/web/AGENTS.md",
+        "---\nowner: x\nlast_reviewed: 2026-01-01\ncanon: true\n---\n\n# web\n",
+    );
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let findings = |v: &serde_json::Value| -> Vec<String> {
+        v["mechanical"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "AGT-0010")
+            .and_then(|r| r["findings"].as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[])
+            .iter()
+            .map(|f| format!("{}:{}", f["file"].as_str().unwrap(), f["text"].as_str().unwrap()))
+            .collect()
+    };
+    assert!(
+        findings(&v).iter().any(|f| f.contains("app/web/AGENTS.md") && f.contains("sources")),
+        "a canon agent doc must declare sources: {:?}",
+        findings(&v)
+    );
+
+    // Declaring sources that predate the doc's review date is clean...
+    write(
+        dir.path(),
+        "app/web/AGENTS.md",
+        "---\nowner: x\nlast_reviewed: 2099-01-01\ncanon: true\nsources:\n  - app/web/src/**\n---\n\n# web\n",
+    );
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        findings(&v).is_empty(),
+        "sources unchanged since review must not flag: {:?}",
+        findings(&v)
+    );
+
+    // A doc carrying `last_reviewed` is governed even without `canon: true` — that is how SKILL.md
+    // is covered, since AGT-0009 never required `canon` there.
+    write(
+        dir.path(),
+        "db/AGENTS.md",
+        "---\nowner: x\nlast_reviewed: 2026-01-01\n---\n\n# db\n",
+    );
+    // A vendored third-party skill has no frontmatter at all, so it is nobody's to keep fresh.
+    write(
+        dir.path(),
+        ".agents/skills/vendored/SKILL.md",
+        "---\nname: vendored\ndescription: upstream, not ours\n---\n\n# vendored\n",
+    );
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        findings(&v).iter().any(|f| f.contains("db/AGENTS.md")),
+        "a reviewed agent doc is governed even without canon: true: {:?}",
+        findings(&v)
+    );
+    assert!(
+        !findings(&v).iter().any(|f| f.contains("vendored")),
+        "a doc with no last_reviewed is not ours to keep fresh: {:?}",
+        findings(&v)
+    );
+
+    // The root AGENTS.md is the index — exempt from declaring sources, like the line cap.
+    assert!(
+        !findings(&v).iter().any(|f| f.starts_with("AGENTS.md:")),
+        "root AGENTS.md must not be forced to declare sources: {:?}",
+        findings(&v)
     );
 }
