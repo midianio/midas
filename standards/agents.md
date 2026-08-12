@@ -140,10 +140,22 @@ nothing fails for a change that has not landed.
 Keep `sources:` **narrow**. `sources: ["**"]` fires on every commit and trains everyone to bump
 reflexively; if a doc genuinely describes everything, it is several docs.
 
+Some agent docs describe a **practice**, not this repo — `tdd`, `grilling`, `code-review` and the
+like. No glob can make those stale, so they declare it outright:
+
+```yaml
+sources: []
+```
+
+An empty list is an answer; a missing key is an omission. The check accepts the first and flags the
+second, which keeps the requirement meaningful without forcing a fake glob onto a doc that has no
+code to point at. The root `AGENTS.md` is exempt for the same reason it escapes the line cap: it is
+the index, so any glob it named would be everything or a slice pretending to be everything.
+
 `ledgered`, not `hard`: unlike the rest of `AGT-0009`, this entry can fail on a file nobody edited,
 so a repo mid-adoption can record the debt (`midas deviate AGT-0010 --reason …`) instead of being
-blocked. `require_sources` also flags a canon file that never declared `sources:` — without it, the
-doc most likely to rot is the one that quietly opted out.
+blocked. Note a ledger entry disables the id wholesale — including for the docs that *do* declare
+sources — so prefer declaring `sources: []` over ledgering.
 
 **`last_reviewed` means someone re-read it.** Bumping it as a side effect of an unrelated edit is
 the one way to defeat this entry, and no check can catch it. That one is on the reviewer.

@@ -1616,6 +1616,25 @@ fn check_agt_source_drift_on_agent_docs() {
         findings(&v)
     );
 
+    // An explicit empty `sources:` is a decision, not an omission: a skill about a *practice* has
+    // no repo glob that could make it stale, and must be able to say so.
+    write(
+        dir.path(),
+        ".agents/skills/tdd/SKILL.md",
+        "---\nowner: x\nlast_reviewed: 2026-01-01\nsources: []\n---\n\n# tdd\n",
+    );
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        !findings(&v).iter().any(|f| f.contains("tdd")),
+        "an explicitly empty sources: must satisfy the requirement: {:?}",
+        findings(&v)
+    );
+
     // A doc carrying `last_reviewed` is governed even without `canon: true` — that is how SKILL.md
     // is covered, since AGT-0009 never required `canon` there.
     write(

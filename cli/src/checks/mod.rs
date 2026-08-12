@@ -463,7 +463,10 @@ impl Scanner {
             // could name is either everything or an arbitrary slice pretending to be everything.
             // Same carve-out AGT-0009 makes for the line cap.
             let is_root_index = rel_str == "AGENTS.md";
-            return if require_sources && !is_root_index {
+            // An explicit empty `sources:` is an answer, not an omission — a doc about a practice
+            // rather than about code has nothing here that can go stale.
+            let declared_empty = frontmatter_declares(content, "sources");
+            return if require_sources && !is_root_index && !declared_empty {
                 vec![Finding {
                     file: rel_str.to_string(),
                     line: 0,
@@ -636,6 +639,25 @@ fn frontmatter_map(content: &str) -> std::collections::HashMap<String, String> {
         }
     }
     kv
+}
+
+/// Whether a frontmatter key is *present at all*, regardless of value. `sources: []` and a
+/// `sources:` block with no entries both mean "nothing in this repo to drift against" — a
+/// deliberate statement — which is not the same as never having considered the question.
+fn frontmatter_declares(content: &str, key: &str) -> bool {
+    let mut lines = content.lines();
+    if lines.next() != Some("---") {
+        return false;
+    }
+    for line in lines {
+        if line.trim() == "---" {
+            break;
+        }
+        if line.starts_with(&format!("{key}:")) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Values of a frontmatter list key, in either YAML shape a human actually writes:
