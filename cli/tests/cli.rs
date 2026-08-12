@@ -1672,3 +1672,69 @@ fn check_agt_source_drift_on_agent_docs() {
         findings(&v)
     );
 }
+
+#[test]
+fn drift_is_skipped_on_a_shallow_clone() {
+    // CI checkouts default to depth 1. With only the head commit, `git log -1 -- <path>` dates
+    // every path to today, so every doc reviewed before today would "drift" — a check that fails
+    // for a reason unrelated to the change. Report nothing rather than something false.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    let manifest = fs::read_to_string(dir.path().join("midas.toml")).unwrap_or_default();
+    write(
+        dir.path(),
+        "midas.toml",
+        &format!("{manifest}\n[docs]\nscopes = [\"api\"]\n"),
+    );
+    write(
+        dir.path(),
+        "docs/ref.api.thing.md",
+        "---\nkind: ref\nscope: api\nstatus: current\nowner: x\nlast_reviewed: 1999-01-01\ncanon: true\nsources:\n  - app/api/src/**\n---\n\n# thing\n",
+    );
+
+    // Make it a git repo with real history, then fake the shallow marker.
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "t"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "seed"]);
+
+    let outcome = |dir: &std::path::Path| -> String {
+        let out = midas()
+            .args(["--json", "check", "--root"])
+            .arg(dir)
+            .output()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["mechanical"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "DOC-0004")
+            .unwrap()["outcome"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        outcome(dir.path()),
+        "fail",
+        "with full history, a 1999 review date against today's code is drift"
+    );
+
+    // `.git/shallow` is what makes `rev-parse --is-shallow-repository` report true.
+    fs::write(dir.path().join(".git/shallow"), "").unwrap();
+    assert_eq!(
+        outcome(dir.path()),
+        "pass",
+        "with truncated history the check must stay silent, not invent dates"
+    );
+}

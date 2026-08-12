@@ -136,6 +136,11 @@ is; a doc about a module that moved yesterday is, however new. Calendar expiry f
 to the doc and rewards bumping the date without reading — which launders staleness into the
 appearance of freshness and is worse than no signal at all. Dates come from committed history, so
 nothing fails for a change that has not landed.
+**CI needs full history.** Drift is computed from git log, so a shallow checkout (the
+`actions/checkout` default) can only see the head commit and would date every path to today. The
+check detects a shallow repository and reports nothing rather than inventing dates — so a CI job
+that wants this enforced must fetch full history (`fetch-depth: 0`). Silence here means "could not
+tell", not "clean".
 
 Keep `sources:` **narrow**. `sources: ["**"]` fires on every commit and trains everyone to bump
 reflexively; if a doc genuinely describes everything, it is several docs.
