@@ -339,6 +339,18 @@ pub fn outcome_of(
                 Err(e) => return eval(Outcome::Skipped, vec![], Some(format!("check error: {e}"))),
             }
         }
+        CheckSpec::SourceDrift {
+            globs,
+            exclude,
+            require_sources,
+        } => match scanner.source_drift(
+            &prefixed(&prefix, globs),
+            &prefixed(&prefix, exclude),
+            *require_sources,
+        ) {
+            Ok(f) => (f, None),
+            Err(e) => return eval(Outcome::Skipped, vec![], Some(format!("check error: {e}"))),
+        },
         // Registry newer than this binary — report, don't crash. See CheckSpec::Unknown.
         CheckSpec::Unknown => {
             return eval(

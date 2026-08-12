@@ -233,6 +233,21 @@ fn spec_line(spec: &CheckSpec) -> String {
                 globs.join(", ")
             )
         }
+        CheckSpec::SourceDrift {
+            globs,
+            require_sources,
+            ..
+        } => {
+            let req = if *require_sources {
+                "; a canon file must declare `sources:`"
+            } else {
+                ""
+            };
+            format!(
+                "source-drift: {} are stale when a declared `sources:` glob changed after `last_reviewed`{req}",
+                globs.join(", ")
+            )
+        }
         CheckSpec::Unknown => {
             "unknown check kind — this midas build predates the registry; upgrade the CLI".into()
         }

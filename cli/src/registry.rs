@@ -145,6 +145,22 @@ pub enum CheckSpec {
         #[serde(default)]
         code_globs: Vec<String>,
     },
+    /// `AGT-0010` — staleness for agent instruction files, the same contract `DOC-0004` gives the
+    /// docs corpus. A `canon: true` file declares `sources:` (the globs it describes) and is stale
+    /// when any of them changed after its `last_reviewed`.
+    ///
+    /// Split from `canon-context` rather than folded into it: that entry is `hard` and checks
+    /// cheap structural facts, whereas this one can fail on a file nobody edited, so it carries a
+    /// different escape.
+    SourceDrift {
+        globs: Vec<String>,
+        #[serde(default)]
+        exclude: Vec<String>,
+        /// Also flag a `canon: true` file that never declared `sources:` — without this, the file
+        /// most likely to rot is the one that opted out.
+        #[serde(default)]
+        require_sources: bool,
+    },
     /// A `kind` this binary does not know — the registry on disk is newer than the CLI reading it.
     ///
     /// Evaluates `skipped` instead of failing the parse. Without this, adding a check kind breaks

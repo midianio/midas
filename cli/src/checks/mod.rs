@@ -390,27 +390,7 @@ impl Scanner {
                         });
                     }
                 }
-                "drift" => {
-                    if fm.get("canon").map(String::as_str) != Some("true") {
-                        continue;
-                    }
-                    let Some(reviewed) = fm.get("last_reviewed") else {
-                        continue;
-                    };
-                    for src in frontmatter_list(&content, "sources") {
-                        if let Some(changed) = self.last_change(&src) {
-                            if changed.as_str() > reviewed.as_str() {
-                                findings.push(Finding {
-                                    file: rel_str.clone(),
-                                    line: 0,
-                                    text: format!(
-                                        "'{src}' changed {changed}, after last_reviewed {reviewed} — re-read it, then bump the date"
-                                    ),
-                                });
-                            }
-                        }
-                    }
-                }
+                "drift" => findings.extend(self.sources_drift(&rel_str, &content, false)),
                 _ => {}
             }
         }
@@ -444,6 +424,87 @@ impl Scanner {
                     break;
                 }
             }
+        }
+        Ok(findings)
+    }
+
+    /// A canon doc is stale when something it claims to describe moved after it was last read.
+    ///
+    /// Shared by `DOC-0004` (the docs corpus) and `AGT-0010` (agent instruction files) — the two
+    /// differ only in which files they glob, not in what staleness means. `require_sources` also
+    /// flags a `canon: true` file that never declared what it describes, since an undeclared doc is
+    /// silently exempt from the check that matters most.
+    ///
+    /// Deliberately keyed on *change*, not the calendar: a doc about untouched code is not stale,
+    /// and a date bumped without reading is the one failure no check can see.
+    fn sources_drift(
+        &mut self,
+        rel_str: &str,
+        content: &str,
+        require_sources: bool,
+    ) -> Vec<Finding> {
+        let fm = frontmatter_map(content);
+        // DOC-0004 governs docs marked `canon: true`. AGT-0010 governs every file AGT-0009 already
+        // covers — which is what carries `last_reviewed` — because `SKILL.md` is not required to
+        // carry `canon: true`, and skills go stale exactly like anything else.
+        let governed = fm.get("canon").map(String::as_str) == Some("true")
+            || (require_sources && fm.contains_key("last_reviewed"));
+        if !governed {
+            return Vec::new();
+        }
+        let sources = frontmatter_list(content, "sources");
+        if sources.is_empty() {
+            // The root `AGENTS.md` is the index, not a description of a subsystem: any glob it
+            // could name is either everything or an arbitrary slice pretending to be everything.
+            // Same carve-out AGT-0009 makes for the line cap.
+            let is_root_index = rel_str == "AGENTS.md";
+            return if require_sources && !is_root_index {
+                vec![Finding {
+                    file: rel_str.to_string(),
+                    line: 0,
+                    text: "declare 'sources:' — the globs this describes, so staleness is checkable".into(),
+                }]
+            } else {
+                Vec::new()
+            };
+        }
+        let Some(reviewed) = fm.get("last_reviewed").cloned() else {
+            return Vec::new();
+        };
+        let mut findings = Vec::new();
+        for src in sources {
+            if let Some(changed) = self.last_change(&src) {
+                if changed.as_str() > reviewed.as_str() {
+                    findings.push(Finding {
+                        file: rel_str.to_string(),
+                        line: 0,
+                        text: format!(
+                            "'{src}' changed {changed}, after last_reviewed {reviewed} — re-read it, then bump the date"
+                        ),
+                    });
+                }
+            }
+        }
+        findings
+    }
+
+    /// `AGT-0010` — the same staleness contract over any glob set, so agent instruction files get
+    /// the guarantee the docs corpus already has.
+    pub fn source_drift(
+        &mut self,
+        globs: &[String],
+        exclude: &[String],
+        require_sources: bool,
+    ) -> Result<Vec<Finding>> {
+        let glob_set = build_globset(globs)?;
+        let exclude_set = build_globset(exclude)?;
+        let mut findings = Vec::new();
+        for rel in self.matching_files(&glob_set, &exclude_set) {
+            let rel_str = rel_slash(&rel);
+            let Some(content) = self.content(&rel).map(str::to_string) else {
+                continue;
+            };
+            findings.extend(self.sources_drift(&rel_str, &content, require_sources));
         }
         Ok(findings)
     }

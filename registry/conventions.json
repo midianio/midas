@@ -1,5 +1,5 @@
 {
-  "version": "0.6.0",
+  "version": "0.7.0",
   "conventions": [
     { "id": "STK-0001", "title": "Backend = Rust (axum 0.8 · tokio · sqlx 0.8 · utoipa).", "layer": "stack", "tier": "review", "escape": "ledgered", "doc": "stack.md" },
     { "id": "STK-0002", "title": "Frontend = SvelteKit 2 + Svelte 5 runes; package manager = Bun.", "layer": "stack", "tier": "review", "escape": "ledgered", "doc": "stack.md" },
@@ -102,6 +102,9 @@
     { "id": "AGT-0008", "title": "A conformant repo ships the required per-domain skill bundle, each a thin doc over standards/.", "layer": "agent", "tier": "review", "escape": "advisory", "doc": "agents.md" },
     { "id": "AGT-0009", "title": "Agent instruction files (AGENTS.md, SKILL.md) carry owner+last_reviewed frontmatter (AGENTS.md also canon: true); nested AGENTS.md capped at 80 lines.", "layer": "agent", "tier": "check", "escape": "hard",
       "check": { "kind": "canon-context", "globs": ["AGENTS.md", "**/AGENTS.md", ".claude/skills/**/SKILL.md"], "exclude": [".claude/skills/gitnexus/**"], "canon_true_globs": ["AGENTS.md", "**/AGENTS.md"], "capped_glob": "**/AGENTS.md", "max_lines": 80 },
+      "doc": "agents.md" },
+    { "id": "AGT-0010", "title": "A canon agent doc declares `sources:` and is stale when any of them changed after its last_reviewed.", "layer": "agent", "tier": "check", "escape": "ledgered",
+      "check": { "kind": "source-drift", "globs": ["AGENTS.md", "**/AGENTS.md", ".claude/skills/**/SKILL.md", ".agents/skills/**/SKILL.md"], "exclude": ["**/gitnexus/**", "**/node_modules/**"], "require_sources": true },
       "doc": "agents.md" },
     { "id": "DOC-0001", "title": "Docs are named <kind>.<scope>.<slug>[.YYYY-MM-DD].md, live in the directory their kind implies, and their frontmatter agrees with their filename.", "layer": "docs", "tier": "check", "escape": "hard",
       "check": { "kind": "doc-lifecycle", "rule": "encoding", "root": "docs", "exclude": ["**/AGENTS.md", "**/README.md"] },
