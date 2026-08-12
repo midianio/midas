@@ -1,6 +1,6 @@
 # midas governs itself (SPEC §9: dogfooding is the test).
 [standard]
-version = "0.7.0"
+version = "0.7.1"
 profile = "cli"
 
 [stack]
