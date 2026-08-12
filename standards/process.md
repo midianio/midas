@@ -24,10 +24,9 @@ One-time, one path. `midas setup` will own this end-to-end (today it's three man
 `README.md:41-50`).
 
 - **OPS-0005 [review]** — Bootstrap is `scripts/setup.sh` → `bun install` → installing the `midas`
-  binary → `midas doctor`. `setup.sh` registers the `merge.ours.driver` git driver so conflicts in
-  generated `db/gen/**` are resolved by regenerating, never hand-merged (`scripts/setup.sh:6-8`).
-  *`bun run setup` is a different thing* — it's `bun install && turbo run build` (`package.json:12`),
-  the deps+build step, not the git/tooling config.
+  binary → `midas doctor`. `setup.sh` is a repo-local hook for any git/tooling config a project
+  needs; it may legitimately be a no-op. *`bun run setup` is a different thing* — the deps+build
+  step, not the git/tooling config.
 - **OPS-0005 [review]** — `midas doctor` is the readiness gate: `git`/`gh`/`go`/`pscale` on PATH,
   `gh`/`pscale` authed, `$GOPATH/bin` on PATH, git identity set (`internal/cmd/doctor.go:40-50`). It
   probes the *active* gh account via `gh api user`, not `gh auth status`, because the latter fails on
@@ -124,8 +123,6 @@ Lint/format/typecheck runs on every PR and on push to `main` (`.github/workflows
 
 - **OPS-0002 [check]** — Frontend: `bun run format:check` (Prettier), `app/web` `bun run lint`
   (ESLint) + `bun run check` (svelte-check / strict TS) (`lint.yml:8-61`; `app/web/package.json:13,18`).
-- **OPS-0002 [check]** — Go (`db/`): `gofmt -l` must be empty (`lint.yml:63-82`); also enforced
-  pre-commit (OPS-0011).
 - **OPS-0002 [check]** — Context lint: `scripts/context-scan.sh --ci` blocks if a canonical
   `AGENTS.md`/`SKILL.md`/`ARCHITECTURE.md` lacks `owner`/`last_reviewed`/`canon:true` frontmatter, or a
   nested `AGENTS.md` exceeds 80 lines (`lint.yml:84-90`; `scripts/context-scan.sh:1-20`).
@@ -146,17 +143,13 @@ Lint/format/typecheck runs on every PR and on push to `main` (`.github/workflows
 The contract is: anything generated from another source of truth is committed, and CI fails on drift.
 `midas gen` will own producing them.
 
-- **OPS-0003 [check]** — go-jet bindings (`db/gen/`) are checked in and **drift-guarded today**: after
-  migrations land on `dev`, `db-codegen.yml` regenerates against the live `dev` schema and opens a PR
-  if `db/gen/` changed (`.github/workflows/db-codegen.yml:13-17,73-106`). Commit a new migration **and**
-  its regenerated bindings together (`db/README.md:133`).
 - **OPS-0003 [check]** — The API contract is generated from the Rust handlers' `#[utoipa::path]`
   annotations: `cargo run --example export_openapi` → `openapi.json` (no DB/server needed), then
   `openapi-typescript` → the TS client (`app/api/scripts/gen-types.sh:14-20`;
   `app/api/examples/export_openapi.rs:9-15`). `midas check` (`artifact-hash`) mechanically requires
   both `openapi.json` and the generated TS client to be **committed** — tracked, not gitignored. This
-  is the **FE-0006** producer. **[gap]** the byte-level regenerate-and-diff guard (same loop as
-  `db/gen`, below) isn't wired into CI yet — only the commit-status half is enforced today.
+  is the **FE-0006** producer. A byte-level regenerate-and-diff guard plus an `oasdiff`
+  breaking-change gate run in the backend workflow; `midas check` covers the commit-status half.
 - **OPS-0003 [check] [gap]** — sqlx is used in its **runtime** form (`sqlx::query`/
   `query_as::<_,T>`, no `query!` macros), so builds need no DB and no cache. The documented target
   (midian's `docs/decisions/adr.api.rust-backend-port.2026-06-25.md`) is to adopt compile-time `query!` + commit the **`.sqlx`
@@ -183,8 +176,8 @@ Full conventions live in `backend/`/`frontend/`; the process rules:
 
 ## Pre-commit, secrets, deploy
 
-- **OPS-0011 [check]** — Husky pre-commit runs `lint-staged` → Prettier (+ `gofmt` on `*.go`)
-  (`.husky/pre-commit`; `package.json:59-66`). Don't bypass with `--no-verify`; fix the lint or fix the
+- **OPS-0011 [check]** — Husky pre-commit runs `lint-staged` → Prettier, then `midas check`
+  (`.husky/pre-commit`). Don't bypass with `--no-verify`; fix the lint or fix the
   hook in its own PR (`README.md:215`).
 - **OPS-0012 [check]** — `.env`/`.env.*` are gitignored except `.env.example`/`.env.test`
   (`.gitignore:6-9`); the committed `app/api/.env` holds dev-only creds and is *not* tracked. Never
