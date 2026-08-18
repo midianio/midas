@@ -130,9 +130,14 @@ subsystem that was deleted weeks earlier while passing every gate.
   globs it describes.
 - It is **stale** when any of those globs changed *after* its `last_reviewed`, at which point the
   fix is to re-read it and then move the date.
+- It is also stale **transitively**: if doc A is stale and doc B lists A (or a glob that matches
+  A) in `sources:`, B will fail the moment A is re-read and its date moves. `midas check`
+  reports B in the same run so one commit can bump the whole cascade — instead of discovering
+  the next file on the next push.
 - Enforcement waits **7 days** after that source change. The doc is already stale the day the
   module moves; the gate does not fire until the change is a week old — enough time to re-read
-  without turning every edit into a blocker. Missing `sources:` is not decay and still fails
+  without turning every edit into a blocker. Transitive hops do not wait another week: they
+  fire when the upstream doc is due. Missing `sources:` is not decay and still fails
   immediately.
 
 The trigger is **change, not the calendar**. A doc about untouched code is not stale however old it
