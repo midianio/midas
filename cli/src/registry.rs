@@ -152,7 +152,8 @@ pub enum CheckSpec {
     },
     /// `AGT-0010` — staleness for agent instruction files, the same contract `DOC-0004` gives the
     /// docs corpus. A `canon: true` file declares `sources:` (the globs it describes) and is stale
-    /// when any of them changed after its `last_reviewed`.
+    /// when any of them changed after its `last_reviewed`, or when a listed source is itself a
+    /// stale governed doc (the rewrite that fixes the first one would fail the next check).
     ///
     /// Split from `canon-context` rather than folded into it: that entry is `hard` and checks
     /// cheap structural facts, whereas this one can fail on a file nobody edited, so it carries a

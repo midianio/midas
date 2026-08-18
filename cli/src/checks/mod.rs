@@ -22,10 +22,15 @@ const MAX_FINDINGS: usize = 50;
 
 pub struct Scanner {
     root: PathBuf,
-    files: Vec<PathBuf>, // relative to root
+    files: Vec<PathBuf>, // relative to root; may be narrowed by `--changed`
+    /// Unfiltered walk — source-drift is a history check, so `--changed` must not hide a
+    /// doc whose *sources* moved. Same idea as "structure checks still run repo-wide".
+    all_files: Vec<PathBuf>,
     cache: HashMap<PathBuf, Option<String>>,
     /// Memoised `git rev-parse --is-shallow-repository`. `None` until first probed.
     shallow: Option<bool>,
+    /// Memoised `git log -1 --format=%cs` per pathspec.
+    last_change: HashMap<String, Option<String>>,
 }
 
 impl Scanner {
@@ -52,9 +57,11 @@ impl Scanner {
         }
         Ok(Scanner {
             root: root.to_path_buf(),
+            all_files: files.clone(),
             files,
             cache: HashMap::new(),
             shallow: None,
+            last_change: HashMap::new(),
         })
     }
 
@@ -63,8 +70,9 @@ impl Scanner {
     }
 
     /// Narrow the scan to `keep` (root-relative, forward-slashed) — `check --changed`. Only the
-    /// content scans (banned-call / banned-file) consult the file list; file-structure and
-    /// managed-block checks probe the filesystem directly and still see the whole tree.
+    /// content scans (banned-call / banned-file) consult the file list; file-structure,
+    /// managed-block, and source-drift checks probe the whole tree (a doc is stale when its
+    /// *sources* moved, not when the doc itself is in the diff).
     pub fn retain(&mut self, keep: &std::collections::HashSet<String>) {
         self.files.retain(|rel| keep.contains(&rel_slash(rel)));
     }
@@ -83,7 +91,17 @@ impl Scanner {
 
     /// Files matching `globs` but not `allow_in` (paths relative to root, forward-slashed).
     fn matching_files(&self, globs: &GlobSet, allow: &GlobSet) -> Vec<PathBuf> {
-        self.files
+        self.filter_files(&self.files, globs, allow)
+    }
+
+    /// Same as [`matching_files`] over the unfiltered walk — used by source-drift so a
+    /// `--changed` retain cannot hide a doc that did not itself change.
+    fn matching_all_files(&self, globs: &GlobSet, allow: &GlobSet) -> Vec<PathBuf> {
+        self.filter_files(&self.all_files, globs, allow)
+    }
+
+    fn filter_files(&self, files: &[PathBuf], globs: &GlobSet, allow: &GlobSet) -> Vec<PathBuf> {
+        files
             .iter()
             .filter(|rel| {
                 let s = rel_slash(rel);
@@ -274,8 +292,14 @@ impl Scanner {
         let docs_glob = build_globset(&[format!("{root}/**/*.md"), format!("{root}/**/*.html")])?;
         let exclude_set = build_globset(exclude)?;
         let mut findings = Vec::new();
+        let mut drift_items: Vec<(String, String)> = Vec::new();
+        let candidates = if rule == "drift" {
+            self.matching_all_files(&docs_glob, &exclude_set)
+        } else {
+            self.matching_files(&docs_glob, &exclude_set)
+        };
 
-        for rel in self.matching_files(&docs_glob, &exclude_set) {
+        for rel in candidates {
             let rel_str = rel_slash(&rel);
             let base = rel
                 .file_name()
@@ -396,9 +420,12 @@ impl Scanner {
                         });
                     }
                 }
-                "drift" => findings.extend(self.sources_drift(&rel_str, &content, false, 0)),
+                "drift" => drift_items.push((rel_str, content)),
                 _ => {}
             }
+        }
+        if rule == "drift" {
+            findings.extend(self.sources_drift_batch(&drift_items, false, 0));
         }
         Ok(findings)
     }
@@ -436,7 +463,9 @@ impl Scanner {
         Ok(findings)
     }
 
-    /// A canon doc is stale when something it claims to describe moved after it was last read.
+    /// A canon doc is stale when something it claims to describe moved after it was last read —
+    /// or when another governed doc it lists in `sources:` is already stale (fixing that one
+    /// will rewrite it, which would fail the next check).
     ///
     /// Shared by `DOC-0004` (the docs corpus) and `AGT-0010` (agent instruction files) — the two
     /// differ only in which files they glob and how long they wait after the change (`grace_days`).
@@ -445,14 +474,46 @@ impl Scanner {
     ///
     /// Deliberately keyed on *change*, not the calendar: a doc about untouched code is not stale,
     /// and a date bumped without reading is the one failure no check can see. `grace_days` is a
-    /// delay on enforcement, not a second trigger.
-    fn sources_drift(
+    /// delay on enforcement, not a second trigger. Transitive hops do not wait again — they fire
+    /// the moment the upstream doc is due, so one `midas check` names the whole cascade.
+    fn sources_drift_batch(
         &mut self,
-        rel_str: &str,
-        content: &str,
+        items: &[(String, String)],
         require_sources: bool,
         grace_days: u32,
     ) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        let mut docs: Vec<DriftDoc> = Vec::new();
+        for (rel_str, content) in items {
+            match self.governed_drift_doc(rel_str, content, require_sources) {
+                DriftParse::Skip => {}
+                DriftParse::MissingSources => findings.push(Finding {
+                    file: rel_str.clone(),
+                    line: 0,
+                    text:
+                        "declare 'sources:' — the globs this describes, so staleness is checkable"
+                            .into(),
+                }),
+                DriftParse::Doc(doc) => docs.push(doc),
+            }
+        }
+        // A shallow clone has only the head commit, so every path would date to today and every
+        // doc reviewed earlier would "drift". Report nothing rather than something false — CI
+        // wanting this check must fetch full history (`fetch-depth: 0`). Missing `sources:` is
+        // structural and does not need history, so those findings still return.
+        if self.is_shallow() {
+            return findings;
+        }
+        findings.extend(self.close_source_drift(&docs, grace_days));
+        findings
+    }
+
+    fn governed_drift_doc(
+        &self,
+        rel_str: &str,
+        content: &str,
+        require_sources: bool,
+    ) -> DriftParse {
         let fm = frontmatter_map(content);
         // DOC-0004 governs docs marked `canon: true`. AGT-0010 governs every file AGT-0009 already
         // covers — which is what carries `last_reviewed` — because `SKILL.md` is not required to
@@ -460,7 +521,7 @@ impl Scanner {
         let governed = fm.get("canon").map(String::as_str) == Some("true")
             || (require_sources && fm.contains_key("last_reviewed"));
         if !governed {
-            return Vec::new();
+            return DriftParse::Skip;
         }
         let sources = frontmatter_list(content, "sources");
         if sources.is_empty() {
@@ -472,47 +533,99 @@ impl Scanner {
             // rather than about code has nothing here that can go stale.
             let declared_empty = frontmatter_declares(content, "sources");
             return if require_sources && !is_root_index && !declared_empty {
-                vec![Finding {
-                    file: rel_str.to_string(),
-                    line: 0,
-                    text:
-                        "declare 'sources:' — the globs this describes, so staleness is checkable"
-                            .into(),
-                }]
+                DriftParse::MissingSources
             } else {
-                Vec::new()
+                DriftParse::Skip
             };
         }
         let Some(reviewed) = fm.get("last_reviewed").cloned() else {
-            return Vec::new();
+            return DriftParse::Skip;
         };
-        // A shallow clone has only the head commit, so every path would date to today and every
-        // doc reviewed earlier would "drift". Report nothing rather than something false — CI
-        // wanting this check must fetch full history (`fetch-depth: 0`).
-        if self.is_shallow() {
-            return Vec::new();
-        }
+        DriftParse::Doc(DriftDoc {
+            path: rel_str.to_string(),
+            sources,
+            reviewed,
+        })
+    }
+
+    /// Direct drift, then walk `sources:` to a fixpoint so a bump on A cannot surprise the next
+    /// check with B (B listed A). Transitive hops use today's date and no extra grace: the rewrite
+    /// of A happens the day someone acts on the finding.
+    fn close_source_drift(&mut self, docs: &[DriftDoc], grace_days: u32) -> Vec<Finding> {
         let today = crate::date::today_ymd();
-        let mut findings = Vec::new();
-        for src in sources {
-            if let Some(changed) = self.last_change(&src) {
-                if crate::date::drift_is_due(&changed, &reviewed, &today, grace_days) {
-                    let grace = if grace_days == 0 {
-                        String::new()
-                    } else {
-                        format!("{grace_days}-day grace elapsed; ")
-                    };
-                    findings.push(Finding {
-                        file: rel_str.to_string(),
-                        line: 0,
-                        text: format!(
-                            "'{src}' changed {changed}, after last_reviewed {reviewed} — {grace}re-read it, then bump the date"
-                        ),
-                    });
+        // path → (reason, is_direct)
+        let mut stale: HashMap<String, DriftReason> = HashMap::new();
+        for doc in docs {
+            for src in &doc.sources {
+                if let Some(changed) = self.last_change(src) {
+                    if crate::date::drift_is_due(&changed, &doc.reviewed, &today, grace_days) {
+                        stale.insert(
+                            doc.path.clone(),
+                            DriftReason::Direct {
+                                src: src.clone(),
+                                changed,
+                                reviewed: doc.reviewed.clone(),
+                            },
+                        );
+                        break;
+                    }
                 }
             }
         }
-        findings
+
+        let mut queue: Vec<String> = stale.keys().cloned().collect();
+        while let Some(upstream) = queue.pop() {
+            for doc in docs {
+                if stale.contains_key(&doc.path) || doc.path == upstream {
+                    continue;
+                }
+                if !doc
+                    .sources
+                    .iter()
+                    .any(|g| source_glob_matches(g, &upstream))
+                {
+                    continue;
+                }
+                // Fixing `upstream` rewrites it today. Same-day `last_reviewed` is not drift.
+                if crate::date::drift_is_due(&today, &doc.reviewed, &today, 0) {
+                    stale.insert(
+                        doc.path.clone(),
+                        DriftReason::Via {
+                            via: upstream.clone(),
+                        },
+                    );
+                    queue.push(doc.path.clone());
+                }
+            }
+        }
+
+        let grace = if grace_days == 0 {
+            String::new()
+        } else {
+            format!("{grace_days}-day grace elapsed; ")
+        };
+        docs.iter()
+            .filter_map(|doc| {
+                let reason = stale.get(&doc.path)?;
+                let text = match reason {
+                    DriftReason::Direct {
+                        src,
+                        changed,
+                        reviewed,
+                    } => format!(
+                        "'{src}' changed {changed}, after last_reviewed {reviewed} — {grace}re-read it, then bump the date"
+                    ),
+                    DriftReason::Via { via } => format!(
+                        "'{via}' is stale and listed in sources: — re-read it when that date moves, then bump the date"
+                    ),
+                };
+                Some(Finding {
+                    file: doc.path.clone(),
+                    line: 0,
+                    text,
+                })
+            })
+            .collect()
     }
 
     /// `AGT-0010` — the same staleness contract over any glob set, so agent instruction files get
@@ -526,15 +639,15 @@ impl Scanner {
     ) -> Result<Vec<Finding>> {
         let glob_set = build_globset(globs)?;
         let exclude_set = build_globset(exclude)?;
-        let mut findings = Vec::new();
-        for rel in self.matching_files(&glob_set, &exclude_set) {
+        let mut items = Vec::new();
+        for rel in self.matching_all_files(&glob_set, &exclude_set) {
             let rel_str = rel_slash(&rel);
             let Some(content) = self.content(&rel).map(str::to_string) else {
                 continue;
             };
-            findings.extend(self.sources_drift(&rel_str, &content, require_sources, grace_days));
+            items.push((rel_str, content));
         }
-        Ok(findings)
+        Ok(self.sources_drift_batch(&items, require_sources, grace_days))
     }
 
     /// Whether this working copy has truncated history. Drift is uncomputable if so.
@@ -557,20 +670,60 @@ impl Scanner {
 
     /// Last commit date (`YYYY-MM-DD`) touching a pathspec, or `None` outside a git repo / for a
     /// path with no history. Glob magic is explicit so `**` means what the frontmatter says.
-    fn last_change(&self, pathspec: &str) -> Option<String> {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&self.root)
-            .args(["log", "-1", "--format=%cs", "--"])
-            .arg(format!(":(glob){pathspec}"))
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
+    fn last_change(&mut self, pathspec: &str) -> Option<String> {
+        if let Some(cached) = self.last_change.get(pathspec) {
+            return cached.clone();
         }
-        let date = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        (date.len() == 10).then_some(date)
+        let date = (|| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&self.root)
+                .args(["log", "-1", "--format=%cs", "--"])
+                .arg(format!(":(glob){pathspec}"))
+                .output()
+                .ok()?;
+            if !out.status.success() {
+                return None;
+            }
+            let date = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            (date.len() == 10).then_some(date)
+        })();
+        self.last_change.insert(pathspec.to_string(), date.clone());
+        date
     }
+}
+
+/// One governed doc that declared `sources:` and a `last_reviewed` date.
+struct DriftDoc {
+    path: String,
+    sources: Vec<String>,
+    reviewed: String,
+}
+
+enum DriftParse {
+    Skip,
+    MissingSources,
+    Doc(DriftDoc),
+}
+
+enum DriftReason {
+    Direct {
+        src: String,
+        changed: String,
+        reviewed: String,
+    },
+    Via {
+        via: String,
+    },
+}
+
+/// Whether a `sources:` glob matches a repo-relative path. Used to walk the doc graph
+/// (`B` lists `A`, `A` is stale ⇒ `B` will be stale the day `A`'s date moves).
+fn source_glob_matches(glob: &str, path: &str) -> bool {
+    Glob::new(glob)
+        .ok()
+        .map(|g| g.compile_matcher().is_match(path))
+        .unwrap_or(false)
 }
 
 /// The fixed lifecycle vocabulary. Repos vary in what they *have* (`scope`); they do not vary in
