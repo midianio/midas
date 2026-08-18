@@ -90,7 +90,7 @@
     { "id": "OPS-0013", "title": "Native ships via manual fastlane dispatch; static SPA via CAPACITOR_BUILD.", "layer": "process", "tier": "review", "escape": "ledgered", "doc": "process.md" },
     { "id": "OPS-0014", "title": "Every [deviations] ledger entry has a tracked path to resolution in a conformance journal.", "layer": "process", "tier": "review", "escape": "advisory", "doc": "process.md" },
 
-    { "id": "AGT-0001", "title": "The version-stamped midas managed block is present + current in agent docs.", "layer": "agent", "tier": "check", "escape": "hard",
+    { "id": "AGT-0001", "title": "The version-stamped midas managed block is present + current in AGENTS.md.", "layer": "agent", "tier": "check", "escape": "hard",
       "check": { "kind": "managed-block" },
       "doc": "agents.md" },
     { "id": "AGT-0002", "title": "Scaffolding goes through midas touch, never hand-rolled.", "layer": "agent", "tier": "review", "escape": "hard", "doc": "agents.md" },

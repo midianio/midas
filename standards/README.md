@@ -128,7 +128,7 @@ exhaustive; promotion of new entries follows `SPEC.md §9`.
 ### Agent playbook — `AGT-` (full prose in [`agents.md`](./agents.md))
 | ID | Rule | Tier | Escape |
 | --- | --- | --- | --- |
-| AGT-0001 | The version-stamped `midas` managed block is present + current in `CLAUDE.md`/`AGENTS.md`. | check | hard |
+| AGT-0001 | The version-stamped `midas` managed block is present + current in `AGENTS.md`. | check | hard |
 | AGT-0002 | Scaffolding goes through `midas touch`, never hand-rolled. | review | hard |
 | AGT-0003 | `midas check` is clean (or ledgered) before a PR. | review | hard |
 | AGT-0004 | On conflict between a stale local doc and the pinned standard, the standard wins. | review | hard |

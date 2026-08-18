@@ -108,14 +108,14 @@ fn check_pscale() -> Check {
     }
 }
 
-/// AGT-0001's local face: the agent docs must carry the current managed block.
+/// AGT-0001's local face: `AGENTS.md` must carry the current managed block.
 fn check_agent_docs(root: &Path) -> Check {
-    use crate::cmd::sync::{status_of, BlockStatus, TARGETS};
+    use crate::cmd::sync::{status_of, BlockStatus, REQUIRED_TARGETS};
     use crate::registry::Registry;
     let version = Registry::embedded()
         .map(|r| r.version)
         .unwrap_or_else(|_| "0.0.0".into());
-    let bad: Vec<&str> = TARGETS
+    let bad: Vec<&str> = REQUIRED_TARGETS
         .iter()
         .filter(|name| {
             let existing = std::fs::read_to_string(root.join(name)).ok();

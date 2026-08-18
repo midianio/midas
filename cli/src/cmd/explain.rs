@@ -203,7 +203,7 @@ fn spec_line(spec: &CheckSpec) -> String {
             format!("banned-file: {} must be gitignored", globs.join(", "))
         }
         CheckSpec::ManagedBlock {} => {
-            "managed-block: agent docs carry the current `midas sync` block".into()
+            "managed-block: AGENTS.md carries the current `midas sync` block".into()
         }
         CheckSpec::ArtifactHash { source, artifact } => {
             format!(

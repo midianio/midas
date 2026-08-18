@@ -77,7 +77,7 @@ enum Commands {
         #[arg(long, value_name = "PATH")]
         to_file: Option<PathBuf>,
     },
-    /// Write/update the version-stamped midas managed block in agent docs.
+    /// Write/update the version-stamped midas managed block in AGENTS.md (and CLAUDE.md if present).
     Sync {
         /// Report drift without writing (exit 2 if a block is missing/stale).
         #[arg(long)]
