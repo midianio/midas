@@ -236,6 +236,7 @@ fn spec_line(spec: &CheckSpec) -> String {
         CheckSpec::SourceDrift {
             globs,
             require_sources,
+            grace_days,
             ..
         } => {
             let req = if *require_sources {
@@ -243,8 +244,13 @@ fn spec_line(spec: &CheckSpec) -> String {
             } else {
                 ""
             };
+            let grace = if *grace_days == 0 {
+                String::new()
+            } else {
+                format!("; enforcement waits {grace_days} days after the source change")
+            };
             format!(
-                "source-drift: {} are stale when a declared `sources:` glob changed after `last_reviewed`{req}",
+                "source-drift: {} are stale when a declared `sources:` glob changed after `last_reviewed`{req}{grace}",
                 globs.join(", ")
             )
         }

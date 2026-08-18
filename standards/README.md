@@ -137,7 +137,7 @@ exhaustive; promotion of new entries follows `SPEC.md §9`.
 | AGT-0007 | Run impact analysis before editing a symbol; run `detect_changes()` before committing. | review | hard |
 | AGT-0008 | A conformant repo ships the required per-domain skill bundle, each a thin doc over `standards/`. | review | advisory |
 | AGT-0009 | Agent instruction files (`AGENTS.md`, `SKILL.md`) carry `owner`+`last_reviewed` frontmatter; nested `AGENTS.md` capped at 80 lines. | check | hard |
-| AGT-0010 | A canon agent doc declares `sources:` and is stale when any of them changed after its `last_reviewed`. | check | ledgered |
+| AGT-0010 | A canon agent doc declares `sources:` and is stale when any of them changed after its `last_reviewed`, enforced after 7 days. | check | ledgered |
 
 ### Documentation — `DOC-` (full prose in [`docs.md`](./docs.md))
 

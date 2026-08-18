@@ -1674,6 +1674,69 @@ fn check_agt_source_drift_on_agent_docs() {
 }
 
 #[test]
+fn check_agt_source_drift_waits_seven_days() {
+    // AGT-0010 lets a source change sit for 7 days before the finding fires. Missing `sources:`
+    // is not decay and is covered above; this is only the date half.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    write(
+        dir.path(),
+        "app/web/AGENTS.md",
+        "---\nowner: x\nlast_reviewed: 1999-01-01\ncanon: true\nsources:\n  - app/web/src/**\n---\n\n# web\n",
+    );
+
+    let git = |args: &[&str], when: Option<&str>| {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C").arg(dir.path()).args(args);
+        if let Some(when) = when {
+            cmd.env("GIT_AUTHOR_DATE", when);
+            cmd.env("GIT_COMMITTER_DATE", when);
+        }
+        cmd.output().unwrap()
+    };
+    git(&["init", "-q"], None);
+    git(&["config", "user.email", "t@example.com"], None);
+    git(&["config", "user.name", "t"], None);
+    git(&["add", "-A"], None);
+    git(&["commit", "-qm", "recent"], Some("1 day ago"));
+
+    let findings = |dir: &std::path::Path| -> Vec<String> {
+        let out = midas()
+            .args(["--json", "check", "--root"])
+            .arg(dir)
+            .output()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["mechanical"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "AGT-0010")
+            .and_then(|r| r["findings"].as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[])
+            .iter()
+            .map(|f| f["text"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert!(
+        findings(dir.path()).is_empty(),
+        "a source that moved yesterday is still inside the 7-day grace: {:?}",
+        findings(dir.path())
+    );
+
+    // Rewrite history so the same path last changed 10 days ago — past the grace window.
+    git(&["commit", "--amend", "-qm", "old"], Some("10 days ago"));
+    assert!(
+        findings(dir.path())
+            .iter()
+            .any(|t| t.contains("app/web/src/**") && t.contains("grace")),
+        "a source that moved 10 days ago must fail AGT-0010: {:?}",
+        findings(dir.path())
+    );
+}
+
+#[test]
 fn drift_is_skipped_on_a_shallow_clone() {
     // CI checkouts default to depth 1. With only the head commit, `git log -1 -- <path>` dates
     // every path to today, so every doc reviewed before today would "drift" — a check that fails
