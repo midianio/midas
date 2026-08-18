@@ -58,7 +58,7 @@ pub fn run(ctx: &Ctx, profile: Option<Profile>) -> CliResult {
         ));
     }
 
-    // 2. The version-stamped agent-docs block (creates CLAUDE.md/AGENTS.md when missing).
+    // 2. The version-stamped agent-docs block (creates AGENTS.md when missing; refreshes CLAUDE.md if present).
     let (version, changed) = crate::cmd::sync::write_blocks(&root)?;
     if changed.is_empty() {
         ctx.out

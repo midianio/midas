@@ -101,8 +101,8 @@ pub enum CheckSpec {
         #[serde(default)]
         message: Option<String>,
     },
-    /// The version-stamped `midas sync` managed block must be present and current in every agent
-    /// doc (`CLAUDE.md`, `AGENTS.md`), stamped with the version of the standard being evaluated.
+    /// The version-stamped `midas sync` managed block must be present and current in `AGENTS.md`,
+    /// stamped with the version of the standard being evaluated. `CLAUDE.md` is not required.
     ManagedBlock {},
     /// Both halves of a generated-artifact pair (the source of truth and the generated output) must
     /// be committed — i.e. tracked and not gitignored. This is the mechanical half of "regenerated &

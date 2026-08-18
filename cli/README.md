@@ -174,7 +174,8 @@ embedded the same way once `upgrade` lands.)
 
 ## Managed-block sync
 
-`midas sync` writes/updates a delimited region in each repo's `CLAUDE.md` and `AGENTS.md`:
+`midas sync` writes/updates a delimited region in each repo's `AGENTS.md` (and `CLAUDE.md` when that
+file already exists):
 
 ```
 <!-- midas:0.4.1 -->  … generated content …  <!-- /midas -->

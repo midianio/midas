@@ -17,8 +17,8 @@ fn write(root: &Path, rel: &str, body: &str) {
     fs::write(p, body).unwrap();
 }
 
-/// A fixture that conforms to the mechanized checks (state dir present, no banned calls, agent
-/// docs synced — AGT-0001; the OpenAPI/TS-client pair committed — BE-0014/FE-0006/OPS-0003).
+/// A fixture that conforms to the mechanized checks (state dir present, no banned calls,
+/// `AGENTS.md` synced — AGT-0001; the OpenAPI/TS-client pair committed — BE-0014/FE-0006/OPS-0003).
 fn clean_fixture(root: &Path) {
     fs::create_dir_all(root.join("app/web/src/lib/state")).unwrap();
     write(root, "app/web/src/lib/utils.ts", "export const x = 1;\n");
@@ -75,6 +75,67 @@ fn check_clean_fixture_passes() {
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let passed = v["mechanical"]["passed"].as_u64().unwrap();
     assert!(passed >= 3, "expected real checks to pass, got {passed}");
+}
+
+#[test]
+fn check_agt_0001_requires_agents_md_not_claude_md() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    assert!(
+        !dir.path().join("CLAUDE.md").exists(),
+        "clean fixture must not create CLAUDE.md"
+    );
+
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "AGT-0001 passes without CLAUDE.md");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let agt = v["mechanical"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "AGT-0001")
+        .expect("AGT-0001 is a mechanical check");
+    assert_eq!(agt["outcome"], "pass");
+
+    // A stale CLAUDE.md is not AGT-0001 drift.
+    write(
+        dir.path(),
+        "CLAUDE.md",
+        "# P\n\n<!-- midas:0.0.1 -->\nold\n<!-- /midas -->\n",
+    );
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stale CLAUDE.md must not fail AGT-0001"
+    );
+
+    fs::remove_file(dir.path().join("AGENTS.md")).unwrap();
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let failing: Vec<String> = v["mechanical"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["outcome"] == "fail")
+        .map(|r| r["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        failing.contains(&"AGT-0001".to_string()),
+        "missing AGENTS.md must fail AGT-0001: {failing:?}"
+    );
 }
 
 #[test]
@@ -375,8 +436,8 @@ fn flow_tag_bad_version_is_usage_error() {
 #[test]
 fn sync_missing_then_present() {
     let dir = tempfile::tempdir().unwrap();
-    // Seed an existing agent doc with project content outside the block.
-    fs::write(dir.path().join("CLAUDE.md"), "# Project\n\nlocal notes\n").unwrap();
+    // Seed an existing required agent doc with project content outside the block.
+    fs::write(dir.path().join("AGENTS.md"), "# Project\n\nlocal notes\n").unwrap();
 
     // --check before sync: block missing → exit 2.
     midas()
@@ -392,7 +453,7 @@ fn sync_missing_then_present() {
         .current_dir(dir.path())
         .assert()
         .success();
-    let written = fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
+    let written = fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
     assert!(written.contains("local notes"), "project content preserved");
     assert!(written.contains("<!-- midas:"), "managed block written");
 
@@ -402,6 +463,37 @@ fn sync_missing_then_present() {
         .current_dir(dir.path())
         .assert()
         .success();
+}
+
+#[test]
+fn sync_refreshes_existing_claude_md_but_does_not_create_it() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("CLAUDE.md"), "# Project\n\nlocal notes\n").unwrap();
+
+    midas()
+        .arg("sync")
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let written = fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
+    assert!(written.contains("local notes"), "project content preserved");
+    assert!(
+        written.contains("<!-- midas:"),
+        "existing CLAUDE.md refreshed"
+    );
+    assert!(dir.path().join("AGENTS.md").is_file());
+
+    // A tree with no CLAUDE.md is still --check clean once AGENTS.md is current.
+    fs::remove_file(dir.path().join("CLAUDE.md")).unwrap();
+    midas()
+        .args(["sync", "--check"])
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    assert!(
+        !dir.path().join("CLAUDE.md").exists(),
+        "sync --check must not create CLAUDE.md"
+    );
 }
 
 #[test]
@@ -573,8 +665,11 @@ fn new_scaffolds_conformant_project() {
     let parsed: toml::Value = toml::from_str(&toml).expect("generated midas.toml parses");
     assert_eq!(parsed["standard"]["profile"].as_str(), Some("service"));
     assert_eq!(parsed["stack"]["backend"]["current"].as_str(), Some("rust"));
-    // agent docs carry the synced managed block
+    // scaffold still writes both docs; AGT-0001 only requires AGENTS.md
     assert!(fs::read_to_string(proj.join("CLAUDE.md"))
+        .unwrap()
+        .contains("<!-- midas:"));
+    assert!(fs::read_to_string(proj.join("AGENTS.md"))
         .unwrap()
         .contains("<!-- midas:"));
 
@@ -1069,8 +1164,12 @@ fn adopt_brownfield_writes_manifest_docs_and_runs_the_gate() {
     let toml = fs::read_to_string(dir.path().join("midas.toml")).unwrap();
     assert!(toml.contains("[standard]"));
     assert!(toml.contains("profile = \"app\""));
-    let doc = fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
+    let doc = fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
     assert!(doc.contains("<!-- midas:"), "agent docs synced");
+    assert!(
+        !dir.path().join("CLAUDE.md").exists(),
+        "adopt must not create CLAUDE.md"
+    );
 
     // Idempotent: a second adopt keeps the manifest and still just re-checks.
     midas()
@@ -1102,6 +1201,11 @@ fn adopt_clean_tree_exits_zero() {
 fn doctor_fix_repairs_stale_agent_docs() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
+        dir.path().join("AGENTS.md"),
+        "# P\n\n<!-- midas:0.0.1 -->\nold\n<!-- /midas -->\n",
+    )
+    .unwrap();
+    fs::write(
         dir.path().join("CLAUDE.md"),
         "# P\n\n<!-- midas:0.0.1 -->\nold\n<!-- /midas -->\n",
     )
@@ -1112,8 +1216,13 @@ fn doctor_fix_repairs_stale_agent_docs() {
         .arg(dir.path())
         .assert()
         .stderr(predicate::str::contains("fixed: synced"));
-    let doc = fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
-    assert!(!doc.contains("midas:0.0.1"), "stale block replaced");
+    let agents = fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+    assert!(!agents.contains("midas:0.0.1"), "stale AGENTS.md replaced");
+    let claude = fs::read_to_string(dir.path().join("CLAUDE.md")).unwrap();
+    assert!(
+        !claude.contains("midas:0.0.1"),
+        "existing CLAUDE.md still refreshed"
+    );
 }
 
 #[test]

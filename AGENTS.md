@@ -1,6 +1,6 @@
 ---
 owner: midas-core
-last_reviewed: 2026-08-12
+last_reviewed: 2026-08-18
 canon: true
 sources:
   - cli/src/cmd/**

@@ -439,11 +439,12 @@ fn prefixed(prefix: &Option<String>, paths: &[String]) -> Vec<String> {
     }
 }
 
-/// AGT-0001: every agent doc must carry the managed block, stamped with the evaluated version.
+/// AGT-0001: `AGENTS.md` must carry the managed block, stamped with the evaluated version.
+/// `CLAUDE.md` is optional — a missing or stale copy is not a finding.
 fn managed_block_findings(scanner: &Scanner, version: &str) -> Vec<Finding> {
-    use crate::cmd::sync::{status_of, BlockStatus, TARGETS};
+    use crate::cmd::sync::{status_of, BlockStatus, REQUIRED_TARGETS};
     let mut findings = Vec::new();
-    for name in TARGETS {
+    for name in REQUIRED_TARGETS {
         let existing = std::fs::read_to_string(scanner.root().join(name)).ok();
         let text = match status_of(existing.as_deref(), version) {
             BlockStatus::Current => continue,
