@@ -93,7 +93,10 @@ history you can no longer replay.
 ## Drift (`DOC-0004` `[check]` `hard` on canon)
 
 A `canon: true` doc is stale when any glob in its `sources:` changed **after** its
-`last_reviewed` date. Blocking for canon docs, inert for everything else.
+`last_reviewed` date. Blocking for canon docs, inert for everything else. The same
+run also flags a doc that lists another *already stale* canon doc in `sources:` —
+fixing the first one rewrites it, which would fail the next check. Report both so
+one commit re-reads the cascade.
 
 The trigger is deliberately *change*, not the calendar. A 200-day-old doc about a subsystem
 nobody touched is fine; a 3-day-old doc about a module that moved yesterday is not. Calendar

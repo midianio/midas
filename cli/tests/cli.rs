@@ -1738,6 +1738,175 @@ fn check_agt_source_drift_waits_seven_days() {
     );
 }
 
+#[test]
+fn check_agt_source_drift_reports_transitive_dependents() {
+    // B lists A in sources:. A is stale (its code moved). B's own last_change(A) is not after
+    // B's last_reviewed — so a direct-only check would miss B, then the bump on A fails the
+    // next push. One run must name both.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    let reviewed_b = ymd_days_ago(20);
+    write(
+        dir.path(),
+        "app/web/AGENTS.md",
+        "---\nowner: x\nlast_reviewed: 1999-01-01\ncanon: true\nsources:\n  - app/web/src/**\n---\n\n# web\n",
+    );
+    write(
+        dir.path(),
+        ".agents/skills/web/SKILL.md",
+        &format!(
+            "---\nowner: x\nlast_reviewed: {reviewed_b}\nsources:\n  - app/web/AGENTS.md\n---\n\n# web skill\n"
+        ),
+    );
+
+    let git = |args: &[&str], when: Option<&str>| {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C").arg(dir.path()).args(args);
+        if let Some(when) = when {
+            cmd.env("GIT_AUTHOR_DATE", when);
+            cmd.env("GIT_COMMITTER_DATE", when);
+        }
+        let out = cmd.output().unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q"], None);
+    git(&["config", "user.email", "t@example.com"], None);
+    git(&["config", "user.name", "t"], None);
+    git(&["add", "-A"], None);
+    git(&["commit", "-qm", "docs"], Some(&git_stamp_days_ago(20)));
+    write(
+        dir.path(),
+        "app/web/src/lib/utils.ts",
+        "export const x = 2;\n",
+    );
+    git(&["add", "app/web/src/lib/utils.ts"], None);
+    git(&["commit", "-qm", "code"], Some(&git_stamp_days_ago(10)));
+
+    let findings = |dir: &std::path::Path| -> Vec<(String, String)> {
+        let out = midas()
+            .args(["--json", "check", "--root"])
+            .arg(dir)
+            .output()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["mechanical"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "AGT-0010")
+            .and_then(|r| r["findings"].as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[])
+            .iter()
+            .map(|f| {
+                (
+                    f["file"].as_str().unwrap().to_string(),
+                    f["text"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    };
+    let got = findings(dir.path());
+    assert!(
+        got.iter()
+            .any(|(f, t)| f == "app/web/AGENTS.md" && t.contains("app/web/src/**")),
+        "A must be directly stale: {got:?}"
+    );
+    assert!(
+        got.iter()
+            .any(|(f, t)| f.contains("web/SKILL.md") && t.contains("app/web/AGENTS.md")),
+        "B must be reported as transitively stale via A: {got:?}"
+    );
+
+    // Same-day review on B means the rewrite of A today would not be after last_reviewed.
+    write(
+        dir.path(),
+        ".agents/skills/web/SKILL.md",
+        &format!(
+            "---\nowner: x\nlast_reviewed: {}\nsources:\n  - app/web/AGENTS.md\n---\n\n# web skill\n",
+            ymd_days_ago(0)
+        ),
+    );
+    let got = findings(dir.path());
+    assert!(
+        !got.iter().any(|(f, _)| f.contains("web/SKILL.md")),
+        "a dependent reviewed today is not yet due: {got:?}"
+    );
+}
+
+#[test]
+fn check_agt_source_drift_sees_unchanged_docs_under_changed_flag() {
+    // `--changed` must not hide a doc whose *sources* moved. That is the pre-push surprise:
+    // local pass, CI (full scan) fail.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    write(
+        dir.path(),
+        "app/web/AGENTS.md",
+        "---\nowner: x\nlast_reviewed: 1999-01-01\ncanon: true\nsources:\n  - app/web/src/**\n---\n\n# web\n",
+    );
+    let git = |args: &[&str], when: Option<&str>| {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C").arg(dir.path()).args(args);
+        if let Some(when) = when {
+            cmd.env("GIT_AUTHOR_DATE", when);
+            cmd.env("GIT_COMMITTER_DATE", when);
+        }
+        let out = cmd.output().unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q"], None);
+    git(&["config", "user.email", "t@example.com"], None);
+    git(&["config", "user.name", "t"], None);
+    git(&["add", "-A"], None);
+    git(&["commit", "-qm", "seed"], Some(&git_stamp_days_ago(10)));
+    write(
+        dir.path(),
+        "app/web/src/lib/extra.ts",
+        "export const y = 1;\n",
+    );
+
+    let out = midas()
+        .args(["--json", "check", "--changed", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let texts: Vec<String> = v["mechanical"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "AGT-0010")
+        .and_then(|r| r["findings"].as_array())
+        .map(|a| a.as_slice())
+        .unwrap_or(&[])
+        .iter()
+        .map(|f| {
+            format!(
+                "{}:{}",
+                f["file"].as_str().unwrap(),
+                f["text"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert!(
+        texts.iter().any(|t| t.contains("app/web/AGENTS.md")),
+        "a doc whose sources moved must fail --changed even if the doc itself is not in the diff: {texts:?}"
+    );
+}
+
+fn ymd_days_ago(n: i64) -> String {
+    git_stamp_days_ago(n)[..10].to_string()
+}
+
 /// Absolute committer stamp `n` UTC days before today. Env-var dates must be absolute.
 fn git_stamp_days_ago(n: i64) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
