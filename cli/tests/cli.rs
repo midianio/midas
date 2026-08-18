@@ -268,7 +268,7 @@ fn check_canon_context_frontmatter_and_size_cap() {
     write(
         dir.path(),
         "app/api/AGENTS.md",
-        "---\nowner: x\nlast_reviewed: 2026-01-01\ncanon: true\n---\n\n# api\n",
+        "---\nowner: x\nlast_reviewed: 2099-01-01\ncanon: true\nsources:\n  - app/api/src/**\n---\n\n# api\n",
     );
     let out = midas()
         .args(["--json", "check", "--root"])
@@ -288,12 +288,7 @@ fn check_canon_context_frontmatter_and_size_cap() {
     write(
         dir.path(),
         "db/AGENTS.md",
-        &format!("---\nowner: x\nlast_reviewed: 2026-01-01\ncanon: true\n---\n\n{long_body}"),
-    );
-    write(
-        dir.path(),
-        "docs/ARCHITECTURE.md",
-        "---\nowner: x\nlast_reviewed: 2026-01-01\n---\n\n# arch\n",
+        &format!("---\nowner: x\nlast_reviewed: 2099-01-01\ncanon: true\nsources:\n  - db/**\n---\n\n{long_body}"),
     );
 
     let out = midas()
@@ -333,11 +328,10 @@ fn check_canon_context_frontmatter_and_size_cap() {
             .any(|f| f.contains("db/AGENTS.md") && f.contains("exceeds")),
         "line-cap violation on db/AGENTS.md: {findings:?}"
     );
+    // `docs/` belongs to the DOC family, not AGT-0009 — the agent-doc check must not reach into it.
     assert!(
-        findings
-            .iter()
-            .any(|f| f.contains("docs/ARCHITECTURE.md") && f.contains("canon: true")),
-        "missing canon: true on docs/ARCHITECTURE.md: {findings:?}"
+        !findings.iter().any(|f| f.contains("docs/")),
+        "AGT-0009 must not claim docs/ (that is DOC's corpus): {findings:?}"
     );
     // SKILL.md carries name+description, not canon: true — it isn't in canon_true_globs, so a
     // missing `canon` key there must never be flagged.
@@ -1284,4 +1278,550 @@ fn dev_watch_restarts_process_on_change() {
     let _ = child.wait();
     let _ = reader.join();
     assert!(restarted, "change to a watched path restarts the process");
+}
+
+#[test]
+fn check_doc_lifecycle_requires_opt_in() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    // A doc that violates every rule — but with no `[docs] scopes`, the repo hasn't opted in.
+    write(dir.path(), "docs/whatever.md", "# nope\n");
+
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    for id in ["DOC-0001", "DOC-0002", "DOC-0004"] {
+        let r = v["mechanical"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap();
+        assert_eq!(
+            r["outcome"], "skipped",
+            "{id} must stay silent until `[docs] scopes` opts the repo in"
+        );
+    }
+}
+
+#[test]
+fn check_doc_lifecycle_encoding_and_frontmatter() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    let manifest = fs::read_to_string(dir.path().join("midas.toml")).unwrap_or_default();
+    write(
+        dir.path(),
+        "midas.toml",
+        &format!("{manifest}\n[docs]\nscopes = [\"repo\", \"api\"]\n"),
+    );
+
+    // Conformant: a ref at the docs root, and a dated adr under decisions/.
+    write(
+        dir.path(),
+        "docs/ref.api.authorization.md",
+        "---\nkind: ref\nscope: api\nstatus: current\nowner: x\nlast_reviewed: 2026-01-01\n---\n\n# authz\n",
+    );
+    write(
+        dir.path(),
+        "docs/decisions/adr.api.rust-port.2026-06-25.md",
+        "---\nkind: adr\nscope: api\nstatus: accepted\nowner: x\ndecided: 2026-06-25\n---\n\n# port\n",
+    );
+    // AGENTS.md and README.md live in docs/ but are not DOC's — they must not be flagged.
+    write(
+        dir.path(),
+        "docs/AGENTS.md",
+        "---\nowner: x\nlast_reviewed: 2026-01-01\ncanon: true\n---\n\n# docs rules\n",
+    );
+    write(dir.path(), "docs/README.md", "# index\n");
+
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let outcome = |id: &str| -> String {
+        v["mechanical"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()["outcome"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(outcome("DOC-0001"), "pass", "conformant corpus passes");
+    assert_eq!(outcome("DOC-0002"), "pass", "conformant corpus passes");
+
+    // Now break it four ways.
+    write(dir.path(), "docs/badname.md", "# unparseable\n");
+    write(
+        dir.path(),
+        "docs/plans/plan.api.thing.2026-01-01.md",
+        "---\nkind: plan\nscope: api\nstatus: draft\nowner: x\n---\n\n# dated plan\n",
+    );
+    write(
+        dir.path(),
+        "docs/ref.repo.misfiled.md",
+        "---\nkind: ref\nscope: api\nstatus: bogus\nowner: x\nlast_reviewed: 2026-01-01\n---\n\n# scope disagrees\n",
+    );
+    write(
+        dir.path(),
+        "docs/ref.repo.canon.md",
+        "---\nkind: ref\nscope: repo\nstatus: current\nowner: x\nlast_reviewed: 2026-01-01\ncanon: true\n---\n\n# canon, no sources\n",
+    );
+
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let findings = |id: &str| -> Vec<String> {
+        v["mechanical"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                format!(
+                    "{}:{}",
+                    f["file"].as_str().unwrap(),
+                    f["text"].as_str().unwrap()
+                )
+            })
+            .collect()
+    };
+
+    let enc = findings("DOC-0001");
+    assert!(
+        enc.iter().any(|f| f.contains("docs/badname.md")),
+        "unparseable name flagged: {enc:?}"
+    );
+    assert!(
+        enc.iter()
+            .any(|f| f.contains("plan.api.thing") && f.contains("no date")),
+        "a plan must not carry a date: {enc:?}"
+    );
+    assert!(
+        enc.iter()
+            .any(|f| f.contains("ref.repo.misfiled.md") && f.contains("scope")),
+        "frontmatter scope must agree with the filename: {enc:?}"
+    );
+    assert!(
+        !enc.iter()
+            .any(|f| f.contains("AGENTS.md") || f.contains("README.md")),
+        "AGENTS.md/README.md are not DOC's: {enc:?}"
+    );
+
+    let fm = findings("DOC-0002");
+    assert!(
+        fm.iter()
+            .any(|f| f.contains("ref.repo.misfiled.md") && f.contains("bogus")),
+        "illegal status flagged: {fm:?}"
+    );
+    assert!(
+        fm.iter()
+            .any(|f| f.contains("ref.repo.canon.md") && f.contains("sources")),
+        "canon doc must declare sources: {fm:?}"
+    );
+}
+
+#[test]
+fn check_doc_citations_reject_plans_and_archive() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    let manifest = fs::read_to_string(dir.path().join("midas.toml")).unwrap_or_default();
+    write(
+        dir.path(),
+        "midas.toml",
+        &format!("{manifest}\n[docs]\nscopes = [\"api\"]\n"),
+    );
+    write(
+        dir.path(),
+        "app/api/src/ok.rs",
+        "//! See docs/ref.api.authorization.md and docs/decisions/adr.api.x.2026-01-01.md.\nfn a() {}\n",
+    );
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let r = v["mechanical"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "DOC-0003")
+        .unwrap()
+        .clone();
+    assert_eq!(r["outcome"], "pass", "citing ref/ and decisions/ is fine");
+
+    write(
+        dir.path(),
+        "app/api/src/bad.rs",
+        "//! Background: docs/archive/note.api.old.2026-01-01.md.\nfn b() {}\n",
+    );
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let r = v["mechanical"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "DOC-0003")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        r["outcome"], "fail",
+        "code citing an archived note is a violation"
+    );
+}
+
+#[test]
+fn touch_doc_scaffolds_a_conformant_doc() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    let manifest = fs::read_to_string(dir.path().join("midas.toml")).unwrap_or_default();
+    write(
+        dir.path(),
+        "midas.toml",
+        &format!("{manifest}\n[docs]\nscopes = [\"api\"]\n"),
+    );
+    midas()
+        .current_dir(dir.path())
+        .args(["touch", "doc", "ref", "api", "rate limiting"])
+        .assert()
+        .success();
+    let path = dir.path().join("docs/ref.api.rate-limiting.md");
+    assert!(path.exists(), "scaffolded at the kind's directory");
+    let body = fs::read_to_string(&path).unwrap();
+    assert!(body.starts_with("---\nkind: ref\nscope: api\n"));
+    assert!(
+        body.contains("last_reviewed:"),
+        "a ref carries a review date"
+    );
+
+    // An unknown scope is a usage error, not a silently-wrong file.
+    midas()
+        .current_dir(dir.path())
+        .args(["touch", "doc", "ref", "nope", "x"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn registry_tolerates_check_kinds_this_build_does_not_know() {
+    // The release bootstrap: `flow tag` parses registry/conventions.json with the *previous*
+    // release's binary. If an unknown `kind` failed the parse, the binary shipping version N could
+    // never cut version N+1 — which is exactly what adding `doc-lifecycle` did to 0.5.0.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    write(
+        dir.path(),
+        "registry/conventions.json",
+        r#"{
+  "version": "99.0.0",
+  "conventions": [
+    { "id": "ZZZ-0001", "title": "A kind from the future.", "layer": "repo", "tier": "check", "escape": "hard",
+      "check": { "kind": "telepathy", "vibes": ["good"] },
+      "doc": "future.md" }
+  ]
+}"#,
+    );
+    // `drift` is the command that reads a registry file off disk.
+    let out = midas()
+        .current_dir(dir.path())
+        .args(["--json", "drift"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unknown variant"),
+        "an unknown check kind must not fail the parse: {stderr}"
+    );
+}
+
+#[test]
+fn check_agt_source_drift_on_agent_docs() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+
+    // A canon agent doc with no `sources:` is silently exempt from the check that matters most.
+    write(
+        dir.path(),
+        "app/web/AGENTS.md",
+        "---\nowner: x\nlast_reviewed: 2026-01-01\ncanon: true\n---\n\n# web\n",
+    );
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let findings = |v: &serde_json::Value| -> Vec<String> {
+        v["mechanical"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "AGT-0010")
+            .and_then(|r| r["findings"].as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[])
+            .iter()
+            .map(|f| {
+                format!(
+                    "{}:{}",
+                    f["file"].as_str().unwrap(),
+                    f["text"].as_str().unwrap()
+                )
+            })
+            .collect()
+    };
+    assert!(
+        findings(&v)
+            .iter()
+            .any(|f| f.contains("app/web/AGENTS.md") && f.contains("sources")),
+        "a canon agent doc must declare sources: {:?}",
+        findings(&v)
+    );
+
+    // Declaring sources that predate the doc's review date is clean...
+    write(
+        dir.path(),
+        "app/web/AGENTS.md",
+        "---\nowner: x\nlast_reviewed: 2099-01-01\ncanon: true\nsources:\n  - app/web/src/**\n---\n\n# web\n",
+    );
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        findings(&v).is_empty(),
+        "sources unchanged since review must not flag: {:?}",
+        findings(&v)
+    );
+
+    // An explicit empty `sources:` is a decision, not an omission: a skill about a *practice* has
+    // no repo glob that could make it stale, and must be able to say so.
+    write(
+        dir.path(),
+        ".agents/skills/tdd/SKILL.md",
+        "---\nowner: x\nlast_reviewed: 2026-01-01\nsources: []\n---\n\n# tdd\n",
+    );
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        !findings(&v).iter().any(|f| f.contains("tdd")),
+        "an explicitly empty sources: must satisfy the requirement: {:?}",
+        findings(&v)
+    );
+
+    // A doc carrying `last_reviewed` is governed even without `canon: true` — that is how SKILL.md
+    // is covered, since AGT-0009 never required `canon` there.
+    write(
+        dir.path(),
+        "db/AGENTS.md",
+        "---\nowner: x\nlast_reviewed: 2026-01-01\n---\n\n# db\n",
+    );
+    // A vendored third-party skill has no frontmatter at all, so it is nobody's to keep fresh.
+    write(
+        dir.path(),
+        ".agents/skills/vendored/SKILL.md",
+        "---\nname: vendored\ndescription: upstream, not ours\n---\n\n# vendored\n",
+    );
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        findings(&v).iter().any(|f| f.contains("db/AGENTS.md")),
+        "a reviewed agent doc is governed even without canon: true: {:?}",
+        findings(&v)
+    );
+    assert!(
+        !findings(&v).iter().any(|f| f.contains("vendored")),
+        "a doc with no last_reviewed is not ours to keep fresh: {:?}",
+        findings(&v)
+    );
+
+    // The root AGENTS.md is the index — exempt from declaring sources, like the line cap.
+    assert!(
+        !findings(&v).iter().any(|f| f.starts_with("AGENTS.md:")),
+        "root AGENTS.md must not be forced to declare sources: {:?}",
+        findings(&v)
+    );
+}
+
+#[test]
+fn check_agt_source_drift_waits_seven_days() {
+    // AGT-0010 lets a source change sit for 7 days before the finding fires. Missing `sources:`
+    // is not decay and is covered above; this is only the date half.
+    // `GIT_*_DATE` wants an absolute stamp — relative phrases like "10 days ago" are rejected.
+    let findings_after = |days_ago: i64| -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        clean_fixture(dir.path());
+        write(
+            dir.path(),
+            "app/web/AGENTS.md",
+            "---\nowner: x\nlast_reviewed: 1999-01-01\ncanon: true\nsources:\n  - app/web/src/**\n---\n\n# web\n",
+        );
+        let stamp = git_stamp_days_ago(days_ago);
+        let git = |args: &[&str], dated: bool| {
+            let mut cmd = std::process::Command::new("git");
+            cmd.arg("-C").arg(dir.path()).args(args);
+            if dated {
+                cmd.env("GIT_AUTHOR_DATE", &stamp);
+                cmd.env("GIT_COMMITTER_DATE", &stamp);
+            }
+            let out = cmd.output().unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-q"], false);
+        git(&["config", "user.email", "t@example.com"], false);
+        git(&["config", "user.name", "t"], false);
+        git(&["add", "-A"], false);
+        git(&["commit", "-qm", "seed"], true);
+
+        let out = midas()
+            .args(["--json", "check", "--root"])
+            .arg(dir.path())
+            .output()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["mechanical"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "AGT-0010")
+            .and_then(|r| r["findings"].as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[])
+            .iter()
+            .map(|f| f["text"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert!(
+        findings_after(1).is_empty(),
+        "a source that moved yesterday is still inside the 7-day grace: {:?}",
+        findings_after(1)
+    );
+    let aged = findings_after(10);
+    assert!(
+        aged.iter()
+            .any(|t| t.contains("app/web/src/**") && t.contains("grace")),
+        "a source that moved 10 days ago must fail AGT-0010: {aged:?}"
+    );
+}
+
+/// Absolute committer stamp `n` UTC days before today. Env-var dates must be absolute.
+fn git_stamp_days_ago(n: i64) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let z = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        / 86400
+        - n;
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}T12:00:00 +0000")
+}
+
+#[test]
+fn drift_is_skipped_on_a_shallow_clone() {
+    // CI checkouts default to depth 1. With only the head commit, `git log -1 -- <path>` dates
+    // every path to today, so every doc reviewed before today would "drift" — a check that fails
+    // for a reason unrelated to the change. Report nothing rather than something false.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    let manifest = fs::read_to_string(dir.path().join("midas.toml")).unwrap_or_default();
+    write(
+        dir.path(),
+        "midas.toml",
+        &format!("{manifest}\n[docs]\nscopes = [\"api\"]\n"),
+    );
+    write(
+        dir.path(),
+        "docs/ref.api.thing.md",
+        "---\nkind: ref\nscope: api\nstatus: current\nowner: x\nlast_reviewed: 1999-01-01\ncanon: true\nsources:\n  - app/api/src/**\n---\n\n# thing\n",
+    );
+
+    // Make it a git repo with real history, then fake the shallow marker.
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "t"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "seed"]);
+
+    let outcome = |dir: &std::path::Path| -> String {
+        let out = midas()
+            .args(["--json", "check", "--root"])
+            .arg(dir)
+            .output()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["mechanical"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "DOC-0004")
+            .unwrap()["outcome"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        outcome(dir.path()),
+        "fail",
+        "with full history, a 1999 review date against today's code is drift"
+    );
+
+    // `.git/shallow` is what makes `rev-parse --is-shallow-repository` report true.
+    fs::write(dir.path().join(".git/shallow"), "").unwrap();
+    assert_eq!(
+        outcome(dir.path()),
+        "pass",
+        "with truncated history the check must stay silent, not invent dates"
+    );
 }

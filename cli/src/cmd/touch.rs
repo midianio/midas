@@ -68,6 +68,17 @@ pub enum TouchCmd {
         #[arg(long)]
         force: bool,
     },
+    /// A conformant document (DOC-0001/0002) in docs/ — named, filed and frontmattered for its kind.
+    Doc {
+        /// ref (current truth) · adr (a frozen decision) · plan (intent) · note (history)
+        kind: Option<String>,
+        /// Subsystem, from this repo's `[docs] scopes`
+        scope: Option<String>,
+        /// Subject slug, e.g. `rate-limiting`
+        slug: Option<String>,
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 pub fn run(ctx: &Ctx, cmd: TouchCmd) -> CliResult {
@@ -94,5 +105,11 @@ pub fn run(ctx: &Ctx, cmd: TouchCmd) -> CliResult {
             ui,
             force,
         } => crate::cmd::add::component(ctx, name, dir, ui, force),
+        TouchCmd::Doc {
+            kind,
+            scope,
+            slug,
+            force,
+        } => crate::cmd::add::doc(ctx, kind, scope, slug, force),
     }
 }

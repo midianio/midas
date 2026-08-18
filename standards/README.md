@@ -19,6 +19,7 @@ orthogonal attributes:
 | L2 · CLI (Rust) | [`cli/conventions.md`](./cli/conventions.md) | written |
 | L4 · Process & ops | [`process.md`](./process.md) | written |
 | L5 · Agent playbook | [`agents.md`](./agents.md) | written |
+| L6 · Documentation | [`docs.md`](./docs.md) (adoption: [`playbooks/adopt-docs.md`](./playbooks/adopt-docs.md)) | written |
 
 ## Editorial rules for standards prose
 
@@ -135,7 +136,20 @@ exhaustive; promotion of new entries follows `SPEC.md §9`.
 | AGT-0006 | The semantic reviewer returns structured findings keyed to convention IDs. | review | hard |
 | AGT-0007 | Run impact analysis before editing a symbol; run `detect_changes()` before committing. | review | hard |
 | AGT-0008 | A conformant repo ships the required per-domain skill bundle, each a thin doc over `standards/`. | review | advisory |
-| AGT-0009 | Canonical `AGENTS.md`/`SKILL.md`/`ARCHITECTURE.md` carry `owner`+`last_reviewed` frontmatter; nested `AGENTS.md` capped at 80 lines. | check | hard |
+| AGT-0009 | Agent instruction files (`AGENTS.md`, `SKILL.md`) carry `owner`+`last_reviewed` frontmatter; nested `AGENTS.md` capped at 80 lines. | check | hard |
+| AGT-0010 | A canon agent doc declares `sources:` and is stale when any of them changed after its `last_reviewed`, enforced after 7 days. | check | ledgered |
+
+### Documentation — `DOC-` (full prose in [`docs.md`](./docs.md))
+
+| ID | Rule | Tier | Escape |
+| --- | --- | --- | --- |
+| DOC-0001 | Docs are named `<kind>.<scope>.<slug>[.YYYY-MM-DD].md`, live in the directory their kind implies, and their frontmatter agrees with their filename. | check | hard |
+| DOC-0002 | Every doc declares its state: required keys per kind, a legal status, and `sources` on anything canon. | check | hard |
+| DOC-0003 | Source files cite `ref`/`decisions` docs only — never a plan or an archived note. | check | ledgered |
+| DOC-0004 | A canon doc whose declared `sources` changed after its `last_reviewed` is stale and must be re-read. | check | hard |
+| DOC-0005 | A shipped plan becomes a `note` or an `adr`, never a stale plan. | review | hard |
+| DOC-0006 | `docs/` root stays small enough to re-read in an hour. | review | advisory |
+| DOC-0007 | Deleting beats archiving when git already has it. | review | advisory |
 
 > IDs are stable once published. Tier, escape policy, and the enforcing check spec are mirrored in
 > `registry/conventions.json` (embedded in the `midas` binary) — the form tooling reads. The

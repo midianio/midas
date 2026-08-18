@@ -22,7 +22,7 @@ code** (the midian Rust backend + Svelte frontend, and the `midflow` release CLI
 | --- | --- |
 | `SPEC.md` | The meta-spec — architecture, CLI, drift/versioning, enforcement, rollout, open decisions. |
 | `standards/stack.md` | L1 — canonical tech choices + swap conditions. |
-| `standards/backend/` | L2 — Rust/axum/sqlx conventions *(split-lift from `midian/plans/rust-port/standards/`, Phase 0)*. |
+| `standards/backend/` | L2 — Rust/axum/sqlx conventions *(split-lift from midian's backend refs, Phase 0)*. |
 | `standards/frontend/conventions.md` | L2 — SvelteKit / Svelte-5 / Capacitor conventions (authored, with refinements). |
 | `standards/cli/conventions.md` | L2 — Rust CLI conventions (extracted by building `midas`). |
 | `standards/process.md` | L4 — setup, CI, the midflow release flow, testing, migrations *(Phase 0)*. |

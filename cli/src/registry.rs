@@ -20,6 +20,12 @@ const HISTORY: &[(&str, &str)] = &[
     ("0.4.0", include_str!("../../registry/history/0.4.0.json")),
     ("0.4.1", include_str!("../../registry/history/0.4.1.json")),
     ("0.5.0", include_str!("../../registry/history/0.5.0.json")),
+    ("0.6.0", include_str!("../../registry/history/0.6.0.json")),
+    ("0.7.0", include_str!("../../registry/history/0.7.0.json")),
+    ("0.7.1", include_str!("../../registry/history/0.7.1.json")),
+    ("0.7.2", include_str!("../../registry/history/0.7.2.json")),
+    ("0.7.3", include_str!("../../registry/history/0.7.3.json")),
+    ("0.7.4", include_str!("../../registry/history/0.7.4.json")),
 ];
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +127,64 @@ pub enum CheckSpec {
         #[serde(default)]
         max_lines: Option<u32>,
     },
+    /// The DOC family: `docs/<kind>.<scope>.<slug>[.<YYYY-MM-DD>].md`, where the directory encodes
+    /// lifecycle and the filename encodes identity. One spec, four `rule`s, because DOC-0001..0004
+    /// share the parse but carry different escapes:
+    ///
+    /// - `encoding`    — name grammar, directory↔kind, date presence, frontmatter agrees (DOC-0001)
+    /// - `frontmatter` — required keys per kind, legal status, `canon` implies `sources` (DOC-0002)
+    /// - `citations`   — source files may cite `ref`/`adr` docs only (DOC-0003)
+    /// - `drift`       — a canon doc whose `sources` moved after `last_reviewed` (DOC-0004)
+    ///
+    /// `scope` is not listed here: it is the repo's own vocabulary, read from `[docs] scopes`. A
+    /// repo that declares none has not opted in, and every rule evaluates empty.
+    DocLifecycle {
+        rule: String,
+        #[serde(default = "default_docs_root")]
+        root: String,
+        /// Paths inside `root` that DOC does not own. `AGENTS.md` at any depth stays AGT-0009's
+        /// (it is an instruction file, not documentation); `README.md` is a rendered entry point.
+        #[serde(default)]
+        exclude: Vec<String>,
+        /// `citations` only: which source files are scanned for doc references.
+        #[serde(default)]
+        code_globs: Vec<String>,
+    },
+    /// `AGT-0010` — staleness for agent instruction files, the same contract `DOC-0004` gives the
+    /// docs corpus. A `canon: true` file declares `sources:` (the globs it describes) and is stale
+    /// when any of them changed after its `last_reviewed`.
+    ///
+    /// Split from `canon-context` rather than folded into it: that entry is `hard` and checks
+    /// cheap structural facts, whereas this one can fail on a file nobody edited, so it carries a
+    /// different escape.
+    ///
+    /// `grace_days` delays enforcement after the source change (AGT-0010 waits 7). Missing
+    /// `sources:` is not decay and still fails immediately when `require_sources` is set.
+    SourceDrift {
+        globs: Vec<String>,
+        #[serde(default)]
+        exclude: Vec<String>,
+        /// Also flag a `canon: true` file that never declared `sources:` — without this, the file
+        /// most likely to rot is the one that opted out.
+        #[serde(default)]
+        require_sources: bool,
+        /// Days after a source change before the drift finding fires. `0` (default) is immediate,
+        /// matching `DOC-0004`.
+        #[serde(default)]
+        grace_days: u32,
+    },
+    /// A `kind` this binary does not know — the registry on disk is newer than the CLI reading it.
+    ///
+    /// Evaluates `skipped` instead of failing the parse. Without this, adding a check kind breaks
+    /// the release itself: `flow tag` reads `registry/conventions.json` with the *previous*
+    /// release's parser, so the binary that ships version N can never cut version N+1. It also
+    /// keeps `midas drift` able to diff a snapshot that uses kinds this build predates.
+    #[serde(other)]
+    Unknown,
+}
+
+fn default_docs_root() -> String {
+    "docs".to_string()
 }
 
 /// One half of an [`CheckSpec::ArtifactHash`] pair. `Real` is the checkable 0.5.0+ shape — a glob,

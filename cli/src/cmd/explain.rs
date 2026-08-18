@@ -233,6 +233,40 @@ fn spec_line(spec: &CheckSpec) -> String {
                 globs.join(", ")
             )
         }
+        CheckSpec::SourceDrift {
+            globs,
+            require_sources,
+            grace_days,
+            ..
+        } => {
+            let req = if *require_sources {
+                "; a canon file must declare `sources:`"
+            } else {
+                ""
+            };
+            let grace = if *grace_days == 0 {
+                String::new()
+            } else {
+                format!("; enforcement waits {grace_days} days after the source change")
+            };
+            format!(
+                "source-drift: {} are stale when a declared `sources:` glob changed after `last_reviewed`{req}{grace}",
+                globs.join(", ")
+            )
+        }
+        CheckSpec::Unknown => {
+            "unknown check kind — this midas build predates the registry; upgrade the CLI".into()
+        }
+        CheckSpec::DocLifecycle { rule, root, .. } => {
+            let what = match rule.as_str() {
+                "encoding" => "names match <kind>.<scope>.<slug>[.date].md, sit in the directory their kind implies, and agree with their frontmatter",
+                "frontmatter" => "required keys per kind, a legal status, and `sources` on anything canon",
+                "citations" => "source files cite ref/ or decisions/ docs only — never a plan or an archived note",
+                "drift" => "a canon doc whose declared `sources` changed after its `last_reviewed`",
+                other => other,
+            };
+            format!("doc-lifecycle ({rule}) over {root}/: {what}")
+        }
     }
 }
 
