@@ -23,7 +23,7 @@ pub fn ymd_to_days(s: &str) -> Option<i64> {
     let y: i64 = s[0..4].parse().ok()?;
     let m: u32 = s[5..7].parse().ok()?;
     let d: u32 = s[8..10].parse().ok()?;
-    (m >= 1 && m <= 12 && d >= 1 && d <= 31).then(|| days_from_civil(y, m, d))
+    ((1..=12).contains(&m) && (1..=31).contains(&d)).then(|| days_from_civil(y, m, d))
 }
 
 /// Whether `s` is a `YYYY-MM-DD` digit string. Does not validate the calendar (2026-13-40 passes).
