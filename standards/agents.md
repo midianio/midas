@@ -130,11 +130,16 @@ subsystem that was deleted weeks earlier while passing every gate.
   globs it describes.
 - It is **stale** when any of those globs changed *after* its `last_reviewed`, at which point the
   fix is to re-read it and then move the date.
+- Enforcement waits **7 days** after that source change. The doc is already stale the day the
+  module moves; the gate does not fire until the change is a week old — enough time to re-read
+  without turning every edit into a blocker. Missing `sources:` is not decay and still fails
+  immediately.
 
 The trigger is **change, not the calendar**. A doc about untouched code is not stale however old it
-is; a doc about a module that moved yesterday is, however new. Calendar expiry fails PRs unrelated
-to the doc and rewards bumping the date without reading — which launders staleness into the
-appearance of freshness and is worse than no signal at all. Dates come from committed history, so
+is; a doc about a module that moved yesterday is, however new. The 7-day window is a delay on
+enacting that finding, not a second clock. Calendar expiry of `last_reviewed` itself fails PRs
+unrelated to the doc and rewards bumping the date without reading — which launders staleness into
+the appearance of freshness and is worse than no signal at all. Dates come from committed history, so
 nothing fails for a change that has not landed.
 **CI needs full history.** Drift is computed from git log, so a shallow checkout (the
 `actions/checkout` default) can only see the head commit and would date every path to today. The

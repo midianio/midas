@@ -343,10 +343,12 @@ pub fn outcome_of(
             globs,
             exclude,
             require_sources,
+            grace_days,
         } => match scanner.source_drift(
             &prefixed(&prefix, globs),
             &prefixed(&prefix, exclude),
             *require_sources,
+            *grace_days,
         ) {
             Ok(f) => (f, None),
             Err(e) => return eval(Outcome::Skipped, vec![], Some(format!("check error: {e}"))),

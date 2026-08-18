@@ -1674,6 +1674,93 @@ fn check_agt_source_drift_on_agent_docs() {
 }
 
 #[test]
+fn check_agt_source_drift_waits_seven_days() {
+    // AGT-0010 lets a source change sit for 7 days before the finding fires. Missing `sources:`
+    // is not decay and is covered above; this is only the date half.
+    // `GIT_*_DATE` wants an absolute stamp — relative phrases like "10 days ago" are rejected.
+    let findings_after = |days_ago: i64| -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        clean_fixture(dir.path());
+        write(
+            dir.path(),
+            "app/web/AGENTS.md",
+            "---\nowner: x\nlast_reviewed: 1999-01-01\ncanon: true\nsources:\n  - app/web/src/**\n---\n\n# web\n",
+        );
+        let stamp = git_stamp_days_ago(days_ago);
+        let git = |args: &[&str], dated: bool| {
+            let mut cmd = std::process::Command::new("git");
+            cmd.arg("-C").arg(dir.path()).args(args);
+            if dated {
+                cmd.env("GIT_AUTHOR_DATE", &stamp);
+                cmd.env("GIT_COMMITTER_DATE", &stamp);
+            }
+            let out = cmd.output().unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-q"], false);
+        git(&["config", "user.email", "t@example.com"], false);
+        git(&["config", "user.name", "t"], false);
+        git(&["add", "-A"], false);
+        git(&["commit", "-qm", "seed"], true);
+
+        let out = midas()
+            .args(["--json", "check", "--root"])
+            .arg(dir.path())
+            .output()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v["mechanical"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "AGT-0010")
+            .and_then(|r| r["findings"].as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[])
+            .iter()
+            .map(|f| f["text"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert!(
+        findings_after(1).is_empty(),
+        "a source that moved yesterday is still inside the 7-day grace: {:?}",
+        findings_after(1)
+    );
+    let aged = findings_after(10);
+    assert!(
+        aged.iter()
+            .any(|t| t.contains("app/web/src/**") && t.contains("grace")),
+        "a source that moved 10 days ago must fail AGT-0010: {aged:?}"
+    );
+}
+
+/// Absolute committer stamp `n` UTC days before today. Env-var dates must be absolute.
+fn git_stamp_days_ago(n: i64) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let z = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        / 86400
+        - n;
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}T12:00:00 +0000")
+}
+
+#[test]
 fn drift_is_skipped_on_a_shallow_clone() {
     // CI checkouts default to depth 1. With only the head commit, `git log -1 -- <path>` dates
     // every path to today, so every doc reviewed before today would "drift" — a check that fails

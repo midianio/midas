@@ -156,6 +156,9 @@ pub enum CheckSpec {
     /// Split from `canon-context` rather than folded into it: that entry is `hard` and checks
     /// cheap structural facts, whereas this one can fail on a file nobody edited, so it carries a
     /// different escape.
+    ///
+    /// `grace_days` delays enforcement after the source change (AGT-0010 waits 7). Missing
+    /// `sources:` is not decay and still fails immediately when `require_sources` is set.
     SourceDrift {
         globs: Vec<String>,
         #[serde(default)]
@@ -164,6 +167,10 @@ pub enum CheckSpec {
         /// most likely to rot is the one that opted out.
         #[serde(default)]
         require_sources: bool,
+        /// Days after a source change before the drift finding fires. `0` (default) is immediate,
+        /// matching `DOC-0004`.
+        #[serde(default)]
+        grace_days: u32,
     },
     /// A `kind` this binary does not know — the registry on disk is newer than the CLI reading it.
     ///

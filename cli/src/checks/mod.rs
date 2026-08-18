@@ -396,7 +396,7 @@ impl Scanner {
                         });
                     }
                 }
-                "drift" => findings.extend(self.sources_drift(&rel_str, &content, false)),
+                "drift" => findings.extend(self.sources_drift(&rel_str, &content, false, 0)),
                 _ => {}
             }
         }
@@ -439,17 +439,19 @@ impl Scanner {
     /// A canon doc is stale when something it claims to describe moved after it was last read.
     ///
     /// Shared by `DOC-0004` (the docs corpus) and `AGT-0010` (agent instruction files) — the two
-    /// differ only in which files they glob, not in what staleness means. `require_sources` also
-    /// flags a `canon: true` file that never declared what it describes, since an undeclared doc is
-    /// silently exempt from the check that matters most.
+    /// differ only in which files they glob and how long they wait after the change (`grace_days`).
+    /// `require_sources` also flags a `canon: true` file that never declared what it describes,
+    /// since an undeclared doc is silently exempt from the check that matters most.
     ///
     /// Deliberately keyed on *change*, not the calendar: a doc about untouched code is not stale,
-    /// and a date bumped without reading is the one failure no check can see.
+    /// and a date bumped without reading is the one failure no check can see. `grace_days` is a
+    /// delay on enforcement, not a second trigger.
     fn sources_drift(
         &mut self,
         rel_str: &str,
         content: &str,
         require_sources: bool,
+        grace_days: u32,
     ) -> Vec<Finding> {
         let fm = frontmatter_map(content);
         // DOC-0004 governs docs marked `canon: true`. AGT-0010 governs every file AGT-0009 already
@@ -490,15 +492,21 @@ impl Scanner {
         if self.is_shallow() {
             return Vec::new();
         }
+        let today = crate::date::today_ymd();
         let mut findings = Vec::new();
         for src in sources {
             if let Some(changed) = self.last_change(&src) {
-                if changed.as_str() > reviewed.as_str() {
+                if crate::date::drift_is_due(&changed, &reviewed, &today, grace_days) {
+                    let grace = if grace_days == 0 {
+                        String::new()
+                    } else {
+                        format!("{grace_days}-day grace elapsed; ")
+                    };
                     findings.push(Finding {
                         file: rel_str.to_string(),
                         line: 0,
                         text: format!(
-                            "'{src}' changed {changed}, after last_reviewed {reviewed} — re-read it, then bump the date"
+                            "'{src}' changed {changed}, after last_reviewed {reviewed} — {grace}re-read it, then bump the date"
                         ),
                     });
                 }
@@ -514,6 +522,7 @@ impl Scanner {
         globs: &[String],
         exclude: &[String],
         require_sources: bool,
+        grace_days: u32,
     ) -> Result<Vec<Finding>> {
         let glob_set = build_globset(globs)?;
         let exclude_set = build_globset(exclude)?;
@@ -523,7 +532,7 @@ impl Scanner {
             let Some(content) = self.content(&rel).map(str::to_string) else {
                 continue;
             };
-            findings.extend(self.sources_drift(&rel_str, &content, require_sources));
+            findings.extend(self.sources_drift(&rel_str, &content, require_sources, grace_days));
         }
         Ok(findings)
     }
@@ -614,7 +623,7 @@ impl DocName {
         let kind = KINDS.iter().find(|k| **k == parts[0])?;
         let scope = scopes.iter().find(|s| *s == parts[1])?.clone();
         let last = parts[parts.len() - 1];
-        let date = is_iso_date(last).then(|| last.to_string());
+        let date = crate::date::is_iso_date(last).then(|| last.to_string());
         // slug must be non-empty once kind, scope and any date are removed
         let slug_parts = parts.len() - 2 - usize::from(date.is_some());
         if slug_parts == 0 {
@@ -622,16 +631,6 @@ impl DocName {
         }
         Some(DocName { kind, scope, date })
     }
-}
-
-fn is_iso_date(s: &str) -> bool {
-    let b = s.as_bytes();
-    b.len() == 10
-        && b[4] == b'-'
-        && b[7] == b'-'
-        && b.iter()
-            .enumerate()
-            .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
 }
 
 /// A relative path as a forward-slashed string — registry globs use `/`, and findings must render
