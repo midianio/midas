@@ -2,7 +2,7 @@
 //! code (2). Semantic/`review`-tier conventions are delegated to an external agent reviewer that
 //! invokes this with `--json` and reads `standards/` (see `SPEC.md §8`); the binary does not run them.
 
-use crate::checks::{Finding, Scanner};
+use crate::checks::{Finding, Origin, Scanner};
 use crate::core::exit::{CliError, CliResult};
 use crate::core::Ctx;
 use crate::flow::config::FlowConfig;
@@ -26,6 +26,8 @@ pub enum Outcome {
     Advisory,
     /// Not run: stack n/a, no mechanical spec, or a deferred check kind.
     Skipped,
+    /// Drift inherited from the PR base (trunk debt) — reported, not gated.
+    Inherited,
 }
 
 #[derive(Serialize)]
@@ -43,7 +45,7 @@ struct Result1 {
     doc: Option<String>,
 }
 
-pub fn run(ctx: &Ctx, changed_only: bool) -> CliResult {
+pub fn run(ctx: &Ctx, changed_only: bool, base: Option<String>) -> CliResult {
     let root = crate::manifest::resolve_root(&ctx.global)?;
 
     let (manifest, has_manifest) = match Manifest::find(&root)? {
@@ -72,8 +74,14 @@ pub fn run(ctx: &Ctx, changed_only: bool) -> CliResult {
     let stamp = manifest.stamp_version(&registry.version).to_string();
 
     let mut scanner = Scanner::new(&root).map_err(CliError::tool)?;
+    let flow = FlowConfig::from_manifest(&manifest);
+    let spec = base.unwrap_or_else(|| format!("origin/{}", flow.trunk));
+    // Attribution is for the full scan too — CI never passes `--changed`, and that's where
+    // inherited trunk debt has to stop blocking unrelated PRs. No resolvable base, or a
+    // base that *is* HEAD (we're on trunk), stays absolute.
+    scanner.set_baseline(resolve_baseline(&root, &spec));
     if changed_only {
-        let changed = changed_files(&root, &FlowConfig::from_manifest(&manifest).trunk)?;
+        let changed = changed_files(&root, &spec)?;
         scanner.retain(&changed);
         ctx.out.step(format!(
             "scanning {} ({} changed files; structure checks still run repo-wide)",
@@ -141,6 +149,10 @@ pub fn run(ctx: &Ctx, changed_only: bool) -> CliResult {
         .iter()
         .filter(|r| r.outcome == Outcome::Skipped)
         .count();
+    let inherited = results
+        .iter()
+        .filter(|r| r.outcome == Outcome::Inherited)
+        .count();
 
     let payload = json!({
         "version": registry.version,
@@ -148,7 +160,7 @@ pub fn run(ctx: &Ctx, changed_only: bool) -> CliResult {
         "mechanical": {
             "checked": results.len(),
             "passed": passed, "failed": failed, "ledgered": ledgered,
-            "advisory": advisory, "skipped": skipped,
+            "advisory": advisory, "inherited": inherited, "skipped": skipped,
             "ledger_errors": &ledger_errors,
             "results": &results,
         },
@@ -176,12 +188,16 @@ pub fn run(ctx: &Ctx, changed_only: bool) -> CliResult {
                 Outcome::Ledgered => s.yellow("⚑"),
                 Outcome::Advisory => s.yellow("⚠"),
                 Outcome::Skipped => s.dim("·"),
+                Outcome::Inherited => s.dim("≈"),
             };
             o.push_str(&format!("  {marker} {}  {}\n", s.dim(&r.id), r.title));
             if let Some(note) = &r.note {
                 o.push_str(&format!("      {}\n", s.dim(note)));
             }
-            if matches!(r.outcome, Outcome::Fail | Outcome::Ledgered | Outcome::Advisory) {
+            if matches!(
+                r.outcome,
+                Outcome::Fail | Outcome::Ledgered | Outcome::Advisory | Outcome::Inherited
+            ) {
                 if let Some(doc) = &r.doc {
                     o.push_str(&format!("      {}\n", s.dim(&format!("standards/{doc}"))));
                 }
@@ -191,6 +207,10 @@ pub fn run(ctx: &Ctx, changed_only: bool) -> CliResult {
                     format!("{}:{}", f.file, f.line)
                 } else {
                     f.file.clone()
+                };
+                let loc = match f.origin {
+                    Some(Origin::Trunk) => format!("≈ {loc}"),
+                    Some(Origin::Branch) | None => loc,
                 };
                 o.push_str(&format!("      {}  {}\n", s.dim(&loc), f.text));
             }
@@ -202,11 +222,12 @@ pub fn run(ctx: &Ctx, changed_only: bool) -> CliResult {
             o.push_str(&format!("  {} {}\n", s.red("✗"), e));
         }
         o.push_str(&format!(
-            "\n  {} passed · {} failed · {} ledgered · {} advisory · {} skipped\n",
+            "\n  {} passed · {} failed · {} ledgered · {} advisory · {} inherited · {} skipped\n",
             s.green(&passed.to_string()),
             if failed > 0 { s.red(&failed.to_string()) } else { failed.to_string() },
             ledgered,
             advisory,
+            inherited,
             skipped,
         ));
         o.push('\n');
@@ -391,6 +412,20 @@ pub fn outcome_of(
         return eval(Outcome::Pass, vec![], None);
     }
 
+    // Every finding is trunk-origin: the source moved on the PR base, not this branch.
+    // Inherited bypasses `escape: hard` — the gate moved to the PR that moved the source.
+    if findings.iter().all(|f| f.origin == Some(Origin::Trunk)) {
+        let n = findings.len();
+        let base = scanner.baseline().unwrap_or("the PR base");
+        return eval(
+            Outcome::Inherited,
+            findings,
+            Some(format!(
+                "{n} inherited from {base} — trunk debt; the gate moved to the PR that moved the source"
+            )),
+        );
+    }
+
     // Violations present — classify by escape policy + deviation ledger.
     let deviated = manifest.deviations.contains_key(&conv.id);
     match conv.escape {
@@ -457,11 +492,7 @@ fn managed_block_findings(scanner: &Scanner, version: &str) -> Vec<Finding> {
             }
             BlockStatus::Missing => "managed block missing — run `midas sync`".to_string(),
         };
-        findings.push(Finding {
-            file: name.to_string(),
-            line: 0,
-            text,
-        });
+        findings.push(Finding::at(name.to_string(), 0, text));
     }
     findings
 }
@@ -496,13 +527,13 @@ fn artifact_hash_findings(
         };
         match scanner.any_match(&full_glob) {
             Ok(true) => {}
-            Ok(false) => findings.push(Finding {
-                file: full_glob,
-                line: 0,
-                text: format!(
+            Ok(false) => findings.push(Finding::at(
+                full_glob,
+                0,
+                format!(
                     "{label} is missing or gitignored — commit it so the pair can't silently drift"
                 ),
-            }),
+            )),
             Err(e) => return Err(format!("check error: {e}")),
         }
     }
@@ -580,11 +611,41 @@ fn escape_str(e: Escape) -> &'static str {
     }
 }
 
+/// Merge-base of `spec` and `HEAD`, or `None` if either ref is missing.
+fn merge_base(root: &Path, spec: &str) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["merge-base", spec, "HEAD"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!sha.is_empty()).then_some(sha)
+}
+
+/// Attribution base: the merge-base with `spec`, unless that *is* HEAD (we're on trunk —
+/// no PR to bill, so findings stay absolute).
+fn resolve_baseline(root: &Path, spec: &str) -> Option<String> {
+    let base = merge_base(root, spec)?;
+    let head = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())?;
+    (base != head).then_some(base)
+}
+
 /// The changed-file set for `--changed`: everything different from the merge-base with
-/// origin/<trunk> (committed + staged + unstaged) plus untracked files. Without an origin/<trunk>
-/// to diff against it degrades to working-tree changes vs HEAD. Paths come back toplevel-relative
-/// from git; they're remapped to be relative to `root` so they match the scanner's file list.
-fn changed_files(root: &Path, trunk: &str) -> Result<HashSet<String>, CliError> {
+/// `spec` (default `origin/<trunk>`) plus untracked files. Without a resolvable base it
+/// degrades to working-tree changes vs HEAD. Paths come back toplevel-relative from git;
+/// they're remapped to be relative to `root` so they match the scanner's file list.
+fn changed_files(root: &Path, spec: &str) -> Result<HashSet<String>, CliError> {
     let git = |args: &[&str]| -> Result<String, CliError> {
         let out = std::process::Command::new("git")
             .arg("-C")
@@ -603,7 +664,7 @@ fn changed_files(root: &Path, trunk: &str) -> Result<HashSet<String>, CliError> 
 
     let toplevel =
         std::fs::canonicalize(git(&["rev-parse", "--show-toplevel"])?).map_err(CliError::tool)?;
-    let base = git(&["merge-base", &format!("origin/{trunk}"), "HEAD"]).ok();
+    let base = merge_base(root, spec);
 
     let mut raw: Vec<String> = Vec::new();
     let diff_target = base.as_deref().unwrap_or("HEAD");

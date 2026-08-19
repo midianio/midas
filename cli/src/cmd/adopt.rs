@@ -109,7 +109,7 @@ pub fn run(ctx: &Ctx, profile: Option<Profile>) -> CliResult {
     }
 
     // 4. Finish on the gate itself — what's left is the real adoption worklist.
-    crate::cmd::check::run(ctx, false)
+    crate::cmd::check::run(ctx, false, None)
 }
 
 /// A minimal brownfield manifest: the pin, the profile's stack layers, and an empty ledger. No

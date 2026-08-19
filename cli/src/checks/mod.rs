@@ -9,12 +9,33 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Whether a drift finding was introduced by this branch or inherited from the PR base.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Origin {
+    Branch,
+    Trunk,
+}
+
 /// One mechanical hit: a file:line that violates a convention.
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {
     pub file: String,
     pub line: u32,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
+}
+
+impl Finding {
+    pub fn at(file: impl Into<String>, line: u32, text: impl AsRef<str>) -> Self {
+        Finding {
+            file: file.into(),
+            line,
+            text: text.as_ref().to_string(),
+            origin: None,
+        }
+    }
 }
 
 /// Cap findings per convention so a pervasive violation doesn't flood output.
@@ -29,8 +50,11 @@ pub struct Scanner {
     cache: HashMap<PathBuf, Option<String>>,
     /// Memoised `git rev-parse --is-shallow-repository`. `None` until first probed.
     shallow: Option<bool>,
-    /// Memoised `git log -1 --format=%cs` per pathspec.
-    last_change: HashMap<String, Option<String>>,
+    /// Memoised `git log -1 --format='%cs %H'` per pathspec.
+    last_change: HashMap<String, Option<(String, String)>>,
+    /// Merge-base (or `--base`) used to attribute drift. `None` means no attribution —
+    /// findings stay absolute, matching a check with no resolvable PR base.
+    baseline: Option<String>,
 }
 
 impl Scanner {
@@ -62,7 +86,17 @@ impl Scanner {
             cache: HashMap::new(),
             shallow: None,
             last_change: HashMap::new(),
+            baseline: None,
         })
+    }
+
+    /// The ref drift findings are attributed against. Unset → absolute (every stale doc fails).
+    pub fn set_baseline(&mut self, baseline: Option<String>) {
+        self.baseline = baseline;
+    }
+
+    pub fn baseline(&self) -> Option<&str> {
+        self.baseline.as_deref()
     }
 
     pub fn file_count(&self) -> usize {
@@ -139,11 +173,11 @@ impl Scanner {
                         truncated = true;
                         break;
                     }
-                    findings.push(Finding {
-                        file: rel_str.clone(),
-                        line: (i + 1) as u32,
-                        text: line.trim().chars().take(160).collect(),
-                    });
+                    findings.push(Finding::at(
+                        rel_str.clone(),
+                        (i + 1) as u32,
+                        line.trim().chars().take(160).collect::<String>(),
+                    ));
                 }
             }
             if truncated {
@@ -161,12 +195,12 @@ impl Scanner {
             .files
             .iter()
             .filter(|rel| glob_set.is_match(rel_slash(rel)))
-            .map(|rel| Finding {
-                file: rel_slash(rel),
-                line: 0,
-                text: message
-                    .unwrap_or("file must be gitignored, never committed")
-                    .into(),
+            .map(|rel| {
+                Finding::at(
+                    rel_slash(rel),
+                    0,
+                    message.unwrap_or("file must be gitignored, never committed"),
+                )
             })
             .collect())
     }
@@ -210,33 +244,31 @@ impl Scanner {
             let fm = frontmatter_map(content);
             for key in ["owner", "last_reviewed"] {
                 if !fm.contains_key(key) {
-                    findings.push(Finding {
-                        file: rel_str.clone(),
-                        line: 0,
-                        text: format!("missing '{key}' in frontmatter"),
-                    });
+                    findings.push(Finding::at(
+                        rel_str.clone(),
+                        0,
+                        format!("missing '{key}' in frontmatter"),
+                    ));
                 }
             }
             if canon_true_set.is_match(&rel_str)
                 && fm.get("canon").map(String::as_str) != Some("true")
             {
-                findings.push(Finding {
-                    file: rel_str.clone(),
-                    line: 0,
-                    text: "missing 'canon: true' in frontmatter".into(),
-                });
+                findings.push(Finding::at(
+                    rel_str.clone(),
+                    0,
+                    "missing 'canon: true' in frontmatter",
+                ));
             }
             let is_nested = rel_str.contains('/');
             if is_nested && capped_set.as_ref().is_some_and(|s| s.is_match(&rel_str)) {
                 let lines = content.lines().count() as u32;
                 if lines > max_lines {
-                    findings.push(Finding {
-                        file: rel_str.clone(),
-                        line: 0,
-                        text: format!(
-                            "{lines} lines exceeds the {max_lines}-line cap for nested docs"
-                        ),
-                    });
+                    findings.push(Finding::at(
+                        rel_str.clone(),
+                        0,
+                        format!("{lines} lines exceeds the {max_lines}-line cap for nested docs"),
+                    ));
                 }
             }
         }
@@ -248,20 +280,12 @@ impl Scanner {
         let mut findings = Vec::new();
         for p in must_exist {
             if !self.root.join(p).exists() {
-                findings.push(Finding {
-                    file: p.clone(),
-                    line: 0,
-                    text: "required path is missing".into(),
-                });
+                findings.push(Finding::at(p.clone(), 0, "required path is missing"));
             }
         }
         for p in must_not_exist {
             if self.root.join(p).exists() {
-                findings.push(Finding {
-                    file: p.clone(),
-                    line: 0,
-                    text: "forbidden path exists".into(),
-                });
+                findings.push(Finding::at(p.clone(), 0, "forbidden path exists"));
             }
         }
         findings
@@ -315,15 +339,11 @@ impl Scanner {
 
             let Some(name) = DocName::parse(&base, scopes) else {
                 if rule == "encoding" {
-                    findings.push(Finding {
-                        file: rel_str,
-                        line: 0,
-                        text: format!(
+                    findings.push(Finding::at(rel_str, 0, format!(
                             "name must be <kind>.<scope>.<slug>[.YYYY-MM-DD].md — kind ∈ {}, scope ∈ {}",
                             KINDS.join("|"),
                             scopes.join("|")
-                        ),
-                    });
+                        )));
                 }
                 continue;
             };
@@ -336,50 +356,38 @@ impl Scanner {
                 "encoding" => {
                     let want_dir = dir_for_kind(name.kind);
                     if dir != want_dir {
-                        findings.push(Finding {
-                            file: rel_str.clone(),
-                            line: 0,
-                            text: format!(
+                        findings.push(Finding::at(
+                            rel_str.clone(),
+                            0,
+                            format!(
                                 "a '{}' belongs in {root}/{want_dir} (found in {root}/{dir})",
                                 name.kind
                             ),
-                        });
+                        ));
                     }
                     let dated = matches!(name.kind, "adr" | "note");
                     if dated && name.date.is_none() {
-                        findings.push(Finding {
-                            file: rel_str.clone(),
-                            line: 0,
-                            text: format!(
+                        findings.push(Finding::at(
+                            rel_str.clone(),
+                            0,
+                            format!(
                                 "a '{}' is point-in-time — its name needs a .YYYY-MM-DD. date",
                                 name.kind
                             ),
-                        });
+                        ));
                     }
                     if !dated && name.date.is_some() {
-                        findings.push(Finding {
-                            file: rel_str.clone(),
-                            line: 0,
-                            text: format!(
+                        findings.push(Finding::at(rel_str.clone(), 0, format!(
                                 "a '{}' is a living doc — no date in the name (state lives in frontmatter)",
                                 name.kind
-                            ),
-                        });
+                            )));
                     }
                     if base.ends_with(".md") {
                         for (key, want) in [("kind", name.kind), ("scope", name.scope.as_str())] {
                             match fm.get(key) {
                                 Some(got) if got == want => {}
-                                Some(got) => findings.push(Finding {
-                                    file: rel_str.clone(),
-                                    line: 0,
-                                    text: format!("frontmatter {key} '{got}' disagrees with the filename '{want}'"),
-                                }),
-                                None => findings.push(Finding {
-                                    file: rel_str.clone(),
-                                    line: 0,
-                                    text: format!("missing '{key}' in frontmatter"),
-                                }),
+                                Some(got) => findings.push(Finding::at(rel_str.clone(), 0, format!("frontmatter {key} '{got}' disagrees with the filename '{want}'"))),
+                                None => findings.push(Finding::at(rel_str.clone(), 0, format!("missing '{key}' in frontmatter"))),
                             }
                         }
                     }
@@ -390,34 +398,34 @@ impl Scanner {
                     }
                     for key in required_keys(name.kind) {
                         if !fm.contains_key(*key) {
-                            findings.push(Finding {
-                                file: rel_str.clone(),
-                                line: 0,
-                                text: format!("missing '{key}' in frontmatter"),
-                            });
+                            findings.push(Finding::at(
+                                rel_str.clone(),
+                                0,
+                                format!("missing '{key}' in frontmatter"),
+                            ));
                         }
                     }
                     match fm.get("status") {
                         Some(s) if statuses(name.kind).contains(&s.as_str()) => {}
-                        Some(s) => findings.push(Finding {
-                            file: rel_str.clone(),
-                            line: 0,
-                            text: format!(
+                        Some(s) => findings.push(Finding::at(
+                            rel_str.clone(),
+                            0,
+                            format!(
                                 "status '{s}' is not legal for a '{}' — expected {}",
                                 name.kind,
                                 statuses(name.kind).join("|")
                             ),
-                        }),
+                        )),
                         None => {}
                     }
                     if fm.get("canon").map(String::as_str) == Some("true")
                         && frontmatter_list(&content, "sources").is_empty()
                     {
-                        findings.push(Finding {
-                            file: rel_str.clone(),
-                            line: 0,
-                            text: "a canon doc must declare 'sources:' — what it describes, so drift is checkable".into(),
-                        });
+                        findings.push(Finding::at(
+                            rel_str.clone(),
+                            0,
+                            "a canon doc must declare 'sources:' — what it describes, so drift is checkable",
+                        ));
                     }
                 }
                 "drift" => drift_items.push((rel_str, content)),
@@ -449,13 +457,13 @@ impl Scanner {
             };
             for (i, line) in content.lines().enumerate() {
                 if let Some(hit) = needles.iter().find(|n| line.contains(n.as_str())) {
-                    findings.push(Finding {
-                        file: rel_str.clone(),
-                        line: i as u32 + 1,
-                        text: format!(
+                    findings.push(Finding::at(
+                        rel_str.clone(),
+                        i as u32 + 1,
+                        format!(
                             "cites {hit}… — code may only cite {root}/ref.* or {root}/decisions/"
                         ),
-                    });
+                    ));
                     break;
                 }
             }
@@ -487,13 +495,11 @@ impl Scanner {
         for (rel_str, content) in items {
             match self.governed_drift_doc(rel_str, content, require_sources) {
                 DriftParse::Skip => {}
-                DriftParse::MissingSources => findings.push(Finding {
-                    file: rel_str.clone(),
-                    line: 0,
-                    text:
-                        "declare 'sources:' — the globs this describes, so staleness is checkable"
-                            .into(),
-                }),
+                DriftParse::MissingSources => findings.push(Finding::at(
+                    rel_str.clone(),
+                    0,
+                    "declare 'sources:' — the globs this describes, so staleness is checkable",
+                )),
                 DriftParse::Doc(doc) => docs.push(doc),
             }
         }
@@ -557,14 +563,16 @@ impl Scanner {
         let mut stale: HashMap<String, DriftReason> = HashMap::new();
         for doc in docs {
             for src in &doc.sources {
-                if let Some(changed) = self.last_change(src) {
+                if let Some((changed, commit)) = self.last_change(src) {
                     if crate::date::drift_is_due(&changed, &doc.reviewed, &today, grace_days) {
+                        let origin = self.origin_of(&commit);
                         stale.insert(
                             doc.path.clone(),
                             DriftReason::Direct {
                                 src: src.clone(),
                                 changed,
                                 reviewed: doc.reviewed.clone(),
+                                origin,
                             },
                         );
                         break;
@@ -588,10 +596,12 @@ impl Scanner {
                 }
                 // Fixing `upstream` rewrites it today. Same-day `last_reviewed` is not drift.
                 if crate::date::drift_is_due(&today, &doc.reviewed, &today, 0) {
+                    let origin = stale.get(&upstream).and_then(|r| r.origin());
                     stale.insert(
                         doc.path.clone(),
                         DriftReason::Via {
                             via: upstream.clone(),
+                            origin,
                         },
                     );
                     queue.push(doc.path.clone());
@@ -607,23 +617,28 @@ impl Scanner {
         docs.iter()
             .filter_map(|doc| {
                 let reason = stale.get(&doc.path)?;
-                let text = match reason {
+                let (text, origin) = match reason {
                     DriftReason::Direct {
                         src,
                         changed,
                         reviewed,
-                    } => format!(
-                        "'{src}' changed {changed}, after last_reviewed {reviewed} — {grace}re-read it, then bump the date"
+                        origin,
+                    } => (
+                        format!(
+                            "'{src}' changed {changed}, after last_reviewed {reviewed} — {grace}re-read it, then bump the date"
+                        ),
+                        *origin,
                     ),
-                    DriftReason::Via { via } => format!(
-                        "'{via}' is stale and listed in sources: — re-read it when that date moves, then bump the date"
+                    DriftReason::Via { via, origin } => (
+                        format!(
+                            "'{via}' is stale and listed in sources: — re-read it when that date moves, then bump the date"
+                        ),
+                        *origin,
                     ),
                 };
-                Some(Finding {
-                    file: doc.path.clone(),
-                    line: 0,
-                    text,
-                })
+                let mut finding = Finding::at(doc.path.clone(), 0, text);
+                finding.origin = origin;
+                Some(finding)
             })
             .collect()
     }
@@ -668,28 +683,67 @@ impl Scanner {
         shallow
     }
 
-    /// Last commit date (`YYYY-MM-DD`) touching a pathspec, or `None` outside a git repo / for a
+    /// Last commit date + hash touching a pathspec, or `None` outside a git repo / for a
     /// path with no history. Glob magic is explicit so `**` means what the frontmatter says.
-    fn last_change(&mut self, pathspec: &str) -> Option<String> {
+    fn last_change(&mut self, pathspec: &str) -> Option<(String, String)> {
         if let Some(cached) = self.last_change.get(pathspec) {
             return cached.clone();
         }
-        let date = (|| {
+        let hit = (|| {
             let out = std::process::Command::new("git")
                 .arg("-C")
                 .arg(&self.root)
-                .args(["log", "-1", "--format=%cs", "--"])
+                .args(["log", "-1", "--format=%cs %H", "--"])
                 .arg(format!(":(glob){pathspec}"))
                 .output()
                 .ok()?;
             if !out.status.success() {
                 return None;
             }
-            let date = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            (date.len() == 10).then_some(date)
+            let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let (date, commit) = line.split_once(' ')?;
+            (date.len() == 10 && (commit.len() == 40 || commit.len() == 64))
+                .then(|| (date.to_string(), commit.to_string()))
         })();
-        self.last_change.insert(pathspec.to_string(), date.clone());
-        date
+        self.last_change.insert(pathspec.to_string(), hit.clone());
+        hit
+    }
+
+    /// Attribute a causing commit: ancestor of the baseline is trunk debt; otherwise this branch.
+    /// No baseline (or baseline == HEAD) means no attribution — the finding stays absolute.
+    fn origin_of(&self, commit: &str) -> Option<Origin> {
+        let baseline = self.baseline.as_deref()?;
+        if self.rev_parse("HEAD").as_deref() == Some(baseline) {
+            return None;
+        }
+        Some(if self.is_ancestor(commit, baseline) {
+            Origin::Trunk
+        } else {
+            Origin::Branch
+        })
+    }
+
+    fn rev_parse(&self, spec: &str) -> Option<String> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.root)
+            .args(["rev-parse", spec])
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    fn is_ancestor(&self, commit: &str, of: &str) -> bool {
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.root)
+            .args(["merge-base", "--is-ancestor", commit, of])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
     }
 }
 
@@ -711,10 +765,20 @@ enum DriftReason {
         src: String,
         changed: String,
         reviewed: String,
+        origin: Option<Origin>,
     },
     Via {
         via: String,
+        origin: Option<Origin>,
     },
+}
+
+impl DriftReason {
+    fn origin(&self) -> Option<Origin> {
+        match self {
+            DriftReason::Direct { origin, .. } | DriftReason::Via { origin, .. } => *origin,
+        }
+    }
 }
 
 /// Whether a `sources:` glob matches a repo-relative path. Used to walk the doc graph

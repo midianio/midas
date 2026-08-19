@@ -44,6 +44,7 @@ impl Output {
         } else {
             let _ = writeln!(w, "{}", human(&self.style));
         }
+        let _ = w.flush();
     }
 
     /// Write an already-shaped JSON value to stdout (only meaningful in `--json` mode; in human
@@ -52,6 +53,7 @@ impl Output {
         let mut w = std::io::stdout().lock();
         let _ = serde_json::to_writer_pretty(&mut w, v);
         let _ = writeln!(w);
+        let _ = w.flush();
     }
 
     // ---- stderr channels (suppressed by --quiet; never collide with a --json stdout parse) ----
@@ -89,6 +91,7 @@ impl Output {
 
     /// Errors print even under `--quiet` (a failure must always be visible).
     pub fn error(&self, msg: impl AsRef<str>) {
+        let _ = std::io::stdout().flush();
         let mut w = std::io::stderr().lock();
         let _ = writeln!(w, "  {} {}", self.style.red("✗"), msg.as_ref());
     }
