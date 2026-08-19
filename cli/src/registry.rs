@@ -107,7 +107,7 @@ pub enum CheckSpec {
     },
     /// The version-stamped `midas sync` managed block must be present and current in `AGENTS.md`,
     /// stamped with the project's pinned standard version (`midas.toml [standard].version`, else
-    /// the embedded binary version). `CLAUDE.md` is not required.
+    /// the embedded binary version).
     ManagedBlock {},
     /// Both halves of a generated-artifact pair (the source of truth and the generated output) must
     /// be committed — i.e. tracked and not gitignored. This is the mechanical half of "regenerated &
