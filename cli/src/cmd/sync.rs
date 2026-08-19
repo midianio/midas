@@ -1,7 +1,6 @@
-//! `midas sync` — materialize the version-stamped managed block into each repo's agent docs.
-//! `AGENTS.md` is required (AGT-0001). `CLAUDE.md` is updated only when it already exists — the
-//! check does not require it. Only the delimited region is touched; project content is untouched.
-//! `--check` reports drift (missing/stale block) without writing — exit 2 on drift.
+//! `midas sync` — materialize the version-stamped managed block into the repo's `AGENTS.md`.
+//! The file is required (AGT-0001). Only the delimited region is touched; project content is
+//! untouched. `--check` reports drift (missing/stale block) without writing — exit 2 on drift.
 
 use crate::core::exit::{CliError, CliResult};
 use crate::core::Ctx;
@@ -9,26 +8,12 @@ use crate::manifest::Manifest;
 use crate::registry::Registry;
 use serde::Serialize;
 use serde_json::json;
-use std::path::Path;
 
 /// Files AGT-0001 requires: the managed block must be present and current.
 pub(crate) const REQUIRED_TARGETS: &[&str] = &["AGENTS.md"];
 
-/// Optional agent docs: `midas sync` refreshes the block when the file already exists.
-const OPTIONAL_TARGETS: &[&str] = &["CLAUDE.md"];
-
 const BEGIN_PREFIX: &str = "<!-- midas:";
 const END: &str = "<!-- /midas -->";
-
-/// Paths `midas sync` will write: required files always, optional files only when present.
-fn write_targets(root: &Path) -> impl Iterator<Item = &'static str> + '_ {
-    REQUIRED_TARGETS.iter().copied().chain(
-        OPTIONAL_TARGETS
-            .iter()
-            .copied()
-            .filter(|name| root.join(name).is_file()),
-    )
-}
 
 #[derive(Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -71,7 +56,7 @@ pub(crate) fn write_blocks_at_version(
 ) -> Result<(String, Vec<String>), CliError> {
     let block = managed_block(version);
     let mut changed: Vec<String> = Vec::new();
-    for name in write_targets(root) {
+    for name in REQUIRED_TARGETS {
         let path = root.join(name);
         let existing = std::fs::read_to_string(&path).ok();
         if let Some(next) = next_content(
@@ -86,9 +71,9 @@ pub(crate) fn write_blocks_at_version(
     Ok((version.to_string(), changed))
 }
 
-/// `AGT-0009`: a freshly created `AGENTS.md` (not `CLAUDE.md` — canon-context excludes it) needs
-/// `owner`/`last_reviewed`/`canon: true` frontmatter from the start, or `midas check` would fail the
-/// file it just wrote. Existing files are never touched here — this only applies when creating one.
+/// `AGT-0009`: a freshly created `AGENTS.md` needs `owner`/`last_reviewed`/`canon: true` frontmatter
+/// from the start, or `midas check` would fail the file it just wrote. Existing files are never
+/// touched here — this only applies when creating one.
 fn preamble_for(name: &str, is_new: bool) -> String {
     if is_new && name == "AGENTS.md" {
         agents_frontmatter()
@@ -112,15 +97,7 @@ pub fn run(ctx: &Ctx, check_only: bool) -> CliResult {
     let mut targets: Vec<Target> = Vec::new();
     let mut changed: Vec<String> = Vec::new();
 
-    // `--check` gates the AGT-0001 set only. Optional files (CLAUDE.md) are refreshed on write
-    // when present, but a missing/stale copy is not drift.
-    let names: Vec<&str> = if check_only {
-        REQUIRED_TARGETS.to_vec()
-    } else {
-        write_targets(&root).collect()
-    };
-
-    for name in names {
+    for name in REQUIRED_TARGETS {
         let path = root.join(name);
         let existing = std::fs::read_to_string(&path).ok();
         let status = status_of(existing.as_deref(), &version);
