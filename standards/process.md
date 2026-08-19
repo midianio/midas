@@ -51,7 +51,8 @@ One-time, one path. `midas setup` will own this end-to-end (today it's three man
   `127.0.0.1:3309`. The org/db/parent/port defaults live in `cli/src/flow/config.rs`
   (`FlowConfig::default`) and midian pins them explicitly in `midas.toml`'s `[flow]` block.
   `bun run dev` is `midas dev`, which reads `[dev]` in `midas.toml`: raise the tunnel → apply pending
-  migrations (`migrate = true`) → run the `api` and `web` processes with watch-and-restart. `midas dev
+  migrations when data-isolated (`migrate = true`) → run the `api` and `web` processes with
+  watch-and-restart. `midas dev
   db` is the tunnel-only invocation; the tunnel always comes up whichever subset you name. A held port
   fails and names the holder unless you pass `--kill-ports`. (`app/api/package.json` still carries a
   `dev` script that blocks on port 3309 before `cargo run`, but `midas dev` invokes `cargo run`
@@ -76,7 +77,7 @@ One-time, one path. `midas setup` will own this end-to-end (today it's three man
 ## Release & branch flow — `midas flow`
 
 The flow is a CLI, not a wiki page: `start` → commit → `rebase` → `ship` → squash-merge → (promote)
-→ `tag`, with `end` · `status` · `clean` around the edges. (`ship` keeps `pr` as an alias; the old
+→ `tag`, with `isolate` · `end` · `status` · `clean` around the edges. (`ship` keeps `pr` as an alias; the old
 midflow names `sync` and `db end --force` are gone — they are `rebase` and `flow end --delete-data`
 now.) **`dev` is the integration trunk** — every feature PRs into it; `main` is production
 (`README.md`, "Git workflow with `midas flow`"). The trunk is configuration, not a constant:
@@ -94,16 +95,19 @@ now.) **`dev` is the integration trunk** — every feature PRs into it; `main` i
   title defaulting to the last commit subject; it refuses to ship from the trunk or `main`
   (`cli/src/cmd/flow.rs`; `cli/src/flow/gh.rs`). `--draft`, `--auto-merge`, `--title`, `--body`
   override.
-- **OPS-0007 [check]** — `feat`/`fix` default to a **paired pscale branch seeded from `dev`** via
-  Data Branching (`pscale branch create --seed-data --wait`); `chore`/`docs`/`spike` are git-only and
-  the tunnel hits shared `dev` (`cli/src/flow/config.rs`, `seed_by_default`;
-  `cli/src/flow/pscale.rs`). `--with-data`/`--no-data` override. There is **no `hotfix` branch
+- **OPS-0007 [check]** — Paired PlanetScale branches are **opt-in by schema intent**, not by branch
+  type. `midas flow start` asks `Schema changes on this branch? [y/N]` (default **no**); yes →
+  seeded paired branch via Data Branching (`pscale branch create --seed-data --wait`); no → git-only
+  and the tunnel hits shared `dev`. `--with-data` / `--no-data` skip the prompt; `-y` / no-TTY
+  without a flag defaults to **no** isolation. Mid-work escape hatch: `midas flow isolate` creates
+  (with confirm) or reuses the paired seeded branch for the current git branch and refreshes
+  `.env.local` (`cli/src/cmd/flow.rs`; `cli/src/flow/pscale.rs`). There is **no `hotfix` branch
   type**. Seeded branches inherit parent cluster size (PS-10 min) and cost money — end them
   (OPS-0009).
 - **OPS-0001 [review]** — **Hotfix** path is `midas flow start fix <slug>` — a `fix/` branch off
-  `dev`, which gets a seeded paired pscale branch by default. For a fire so urgent PR-and-merge is
-  too slow, revert the bad commit on `main` with a *new* commit and tell the team — never force-push
-  (`README.md`, "Hotfixes").
+  `dev`. Answer yes to schema changes (or pass `--with-data`) when the fix needs DDL isolation; otherwise
+  the tunnel hits shared `dev`. For a fire so urgent PR-and-merge is too slow, revert the bad commit
+  on `main` with a *new* commit and tell the team — never force-push (`README.md`, "Hotfixes").
 - **OPS-0010 [review]** — Squash-merge to `dev`; the squash subject reads as a changelog line. Review
   is risk-tiered: features / schema / auth / payments / data-writes **wait for review**; a fix-with-a-
   test or dep bump may self-merge after 24h of silence; docs/scaffold self-merge (`README.md`,
@@ -117,7 +121,11 @@ now.) **`dev` is the integration trunk** — every feature PRs into it; `main` i
 
 - **OPS-0008 [check]** — Migrations are **forward-only**, numbered `NNN_short_name.sql` in
   `db/migrations/`, applied in lexical order by `midas migrate apply` (and automatically by `midas
-  dev` once the tunnel is up; `midas migrate status` is the read-only view). The runner records each
+  dev` once the tunnel is up **and the session is data-isolated** — paired pscale branch exists;
+  shared-parent sessions skip auto-migrate and warn if `db/migrations/**` changed vs trunk). A
+  migrate failure during `midas dev` is soft: warn at failure and again on shutdown; the session
+  keeps running. Explicit `midas migrate apply` **refuses** on shared parent unless `--force`.
+  `midas migrate status` is the read-only view. The runner records each
   file in a `_migrations` ledger keyed by **filename** with a SHA-256 **checksum**, so re-runs are
   no-ops and **editing an applied migration is rejected at runtime** (the BE-0007 guard). One DDL set
   per file, **no `BEGIN`/`COMMIT`** (Vitess forbids DDL-in-txn; the runner applies each file with

@@ -1,28 +1,29 @@
-//! `midas flow` — the release/branch lifecycle: start · rebase · ship · tag · end · status · clean.
-//! Active state is derived from the current git branch (the paired pscale branch is
+//! `midas flow` — the release/branch lifecycle: start · isolate · rebase · ship · tag · end ·
+//! status · clean. Active state is derived from the current git branch (the paired pscale branch is
 //! `pscale_branch_from_git`), so there is no state file to keep in sync.
 //!
 //! The daily loop is `start → ship → end`: `start` cuts the branch, `ship` is the opinionated "send
 //! it" (rebase on trunk, push, open-or-update the PR in one shot), and `end` cleans up. `rebase` is
 //! the lower-level rebase-only catch-up for mid-work; `ship` already does it as its first step.
+//! `isolate` attaches a seeded paired pscale branch mid-work when you opted out at start.
 //! `clean` is the janitor: it prunes local feature branches whose PR merged, plus their paired
 //! pscale branches.
 
 use crate::core::exit::{CliError, CliResult};
 use crate::core::{prompt_line, Ctx};
 use crate::flow::config::{
-    pscale_branch_from_git, seed_by_default, slugify, valid_branch_type, validate_slug,
-    BRANCH_TYPES,
+    pscale_branch_from_git, slugify, valid_branch_type, validate_slug, BRANCH_TYPES,
 };
 use crate::flow::{env, gh, git, pscale, release, FlowConfig};
 use crate::manifest::Manifest;
 use clap::Subcommand;
 use serde_json::json;
+use std::io::IsTerminal;
 use std::path::Path;
 
 #[derive(Subcommand)]
 pub enum FlowCmd {
-    /// Create a feature branch off the trunk (feat/fix get a seeded paired pscale branch).
+    /// Create a feature branch off the trunk (schema isolation is opt-in).
     Start {
         /// Branch type: feat | fix | chore | docs | spike
         branch_type: Option<String>,
@@ -35,6 +36,8 @@ pub enum FlowCmd {
         #[arg(long)]
         no_data: bool,
     },
+    /// Attach a seeded paired pscale branch to the current git branch (mid-work schema escape hatch).
+    Isolate,
     /// Rebase the current branch on origin/<trunk> and push (mid-work catch-up).
     #[command(alias = "sync")]
     Rebase,
@@ -88,6 +91,7 @@ pub fn run(ctx: &Ctx, manifest: &Manifest, cmd: FlowCmd) -> CliResult {
             with_data,
             no_data,
         } => start(ctx, &cfg, branch_type, slug, with_data, no_data),
+        FlowCmd::Isolate => isolate(ctx, &cfg),
         FlowCmd::Rebase => rebase(ctx, &cfg),
         FlowCmd::Ship {
             draft,
@@ -99,6 +103,17 @@ pub fn run(ctx: &Ctx, manifest: &Manifest, cmd: FlowCmd) -> CliResult {
         FlowCmd::End { delete_data } => end(ctx, &cfg, delete_data),
         FlowCmd::Status => status(ctx, &cfg),
         FlowCmd::Clean { dry_run } => clean(ctx, &cfg, dry_run),
+    }
+}
+
+/// Resolve whether this start should create a seeded paired pscale branch.
+/// Flags win; otherwise interactive prompt (default no); `-y` / no-TTY without a flag → no.
+fn resolve_data_isolation(ctx: &Ctx, with_data: bool, no_data: bool) -> Result<bool, CliError> {
+    let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    match crate::flow::config::isolation_decision(with_data, no_data, ctx.global.yes, interactive)?
+    {
+        Some(v) => Ok(v),
+        None => ctx.confirm("Schema changes on this branch?", false),
     }
 }
 
@@ -116,12 +131,10 @@ fn start(
             "worktree is dirty — commit or stash before starting a new branch",
         ));
     }
-    pscale::ensure_auth()?;
 
-    if with_data && no_data {
-        return Err(CliError::usage(
-            "--with-data and --no-data are mutually exclusive",
-        ));
+    let isolated = resolve_data_isolation(ctx, with_data, no_data)?;
+    if isolated {
+        pscale::ensure_auth()?;
     }
 
     // Resolve branch type.
@@ -156,14 +169,6 @@ fn start(
         )));
     }
 
-    let isolated = if with_data {
-        true
-    } else if no_data {
-        false
-    } else {
-        seed_by_default(&branch_type)
-    };
-
     let pscale_branch = if isolated {
         pscale_branch_from_git(&git_branch)
     } else {
@@ -173,28 +178,16 @@ fn start(
     ctx.out.banner(format!("Starting {git_branch}"));
 
     if isolated {
-        ctx.out.step(format!(
-            "pscale branch create {} {} --from {} --seed-data",
-            cfg.db, pscale_branch, cfg.parent
-        ));
-        if pscale::branch_exists(cfg, &pscale_branch) {
-            ctx.out.info(format!(
-                "pscale branch {pscale_branch} already exists — reusing"
-            ));
-        } else {
-            ctx.out.info(format!(
-                "seeding from {} — this can take a few minutes",
-                cfg.parent
-            ));
-            pscale::create_branch(cfg, &pscale_branch, true)?;
-        }
+        ensure_seeded_branch(ctx, cfg, &pscale_branch, false)?;
     } else {
         ctx.out.info(format!(
             "git-only flow — local tunnel will hit shared `{}` branch",
             cfg.parent
         ));
         ctx.out
-            .hint("pass --with-data to create a seeded paired pscale branch");
+            .hint("pass --with-data (or answer yes to schema changes) for a seeded paired branch");
+        ctx.out
+            .hint("mid-work: `midas flow isolate` attaches one later");
     }
 
     ctx.out.step(format!("git fetch origin {}", cfg.parent));
@@ -208,11 +201,72 @@ fn start(
     env::write_api_env_local(cfg)?;
 
     ctx.out.success(format!("on branch {git_branch}"));
-    ctx.out.info("start tunnel + dev: bun run dev");
+    ctx.out.info("start tunnel + dev: midas dev");
 
     ctx.out.data(
         &json!({ "gitBranch": &git_branch, "pscaleBranch": &pscale_branch, "dataIsolated": isolated }),
         |_| git_branch.clone(),
+    );
+    Ok(())
+}
+
+/// Create or reuse a seeded paired pscale branch for `name`.
+/// When `confirm_create` is true (e.g. `flow isolate`), prompt before paying for Data Branching.
+fn ensure_seeded_branch(
+    ctx: &Ctx,
+    cfg: &FlowConfig,
+    name: &str,
+    confirm_create: bool,
+) -> CliResult {
+    ctx.out.step(format!(
+        "pscale branch create {} {} --from {} --seed-data",
+        cfg.db, name, cfg.parent
+    ));
+    if pscale::branch_exists(cfg, name) {
+        ctx.out
+            .info(format!("pscale branch {name} already exists — reusing"));
+        return Ok(());
+    }
+    if confirm_create
+        && !ctx.confirm(
+            &format!(
+                "Create seeded PlanetScale branch {name:?} from {}? (costs money; can take a few minutes)",
+                cfg.parent
+            ),
+            true,
+        )?
+    {
+        return Err(CliError::expected("aborted — no pscale branch created"));
+    }
+    ctx.out.info(format!(
+        "seeding from {} — this can take a few minutes",
+        cfg.parent
+    ));
+    pscale::create_branch(cfg, name, true)?;
+    Ok(())
+}
+
+fn isolate(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
+    git::ensure_repo()?;
+    pscale::ensure_auth()?;
+    let git_branch = git::current_branch()?;
+    if git_branch == cfg.trunk || git_branch == "main" {
+        return Err(CliError::usage(format!(
+            "refusing to isolate {git_branch:?} — switch to a feature branch first"
+        )));
+    }
+    let paired = pscale_branch_from_git(&git_branch);
+    ctx.out.banner(format!("Isolating {git_branch}"));
+    ensure_seeded_branch(ctx, cfg, &paired, true)?;
+    env::write_api_env_local(cfg)?;
+    ctx.out
+        .success(format!("paired pscale branch {paired} ready"));
+    ctx.out.hint(
+        "restart `midas dev` so the tunnel picks up the branch, then migrations will auto-apply",
+    );
+    ctx.out.data(
+        &json!({ "gitBranch": git_branch, "pscaleBranch": paired, "dataIsolated": true }),
+        |_| paired.clone(),
     );
     Ok(())
 }

@@ -44,6 +44,19 @@ pub fn create_branch(cfg: &FlowConfig, name: &str, seed_data: bool) -> Result<()
     inherit("pscale", &args)
 }
 
+/// True when the current git branch has a paired PlanetScale branch (data-isolated). Shared parent
+/// / trunk sessions are not isolated — auto-migrate and `migrate apply` gate on this.
+pub fn is_data_isolated(cfg: &FlowConfig, git_branch: &str) -> bool {
+    if git_branch.is_empty() || git_branch == cfg.trunk || git_branch == "main" {
+        return false;
+    }
+    let paired = super::config::pscale_branch_from_git(git_branch);
+    if paired == cfg.parent || paired == "main" || paired == "dev" {
+        return false;
+    }
+    branch_exists(cfg, &paired)
+}
+
 /// Refuses to delete `main`/`dev`/the configured parent even with a tampered state file.
 pub fn delete_branch(cfg: &FlowConfig, name: &str) -> Result<()> {
     if name == "main" || name == "dev" || name == cfg.parent {

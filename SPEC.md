@@ -360,10 +360,11 @@ The conventions + the agent's marching orders need to reach every repo without c
 agent config (`midian/CLAUDE.md` is GitNexus-specific; each repo has its own `AGENTS.md`, `.cursor`):
 
 - **`midas sync` writes a version-stamped managed block** — `<!-- midas:0.4.1 -->…<!-- /midas -->` —
-  into each repo's `AGENTS.md` (AGT-0001): naming the pinned version, pointing at the conventions,
-  instructing the agent to treat `midas check`/`add` as source of truth. If `CLAUDE.md` already
-  exists, the same block is refreshed there; the file is not required. **Project content lives
-  outside the block, untouched.** A stale/missing `AGENTS.md` block is `check`-tier drift.
+  into each repo's `AGENTS.md` (AGT-0001): naming the version pinned in `midas.toml`
+  `[standard].version` (falling back to the binary's embedded standard when unset), pointing at the
+  conventions, instructing the agent to treat `midas check`/`add` as source of truth. If `CLAUDE.md`
+  already exists, the same block is refreshed there; the file is not required. **Project content
+  lives outside the block, untouched.** A stale/missing `AGENTS.md` block is `check`-tier drift.
 - **Executable skills ship as a versioned bundle** (delivery via `midas setup`, planned) — thin
   wrappers over the binary, so the sync surface is tiny (logic lives in `midas`, not the skill). Full
   design: [`standards/agents.md`](./standards/agents.md).

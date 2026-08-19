@@ -1,16 +1,11 @@
 use crate::manifest::Manifest;
 
-/// Branch types, in display order. `feat`/`fix` default to a seeded paired pscale branch;
-/// `chore`/`docs`/`spike` are git-only by default.
+/// Branch types, in display order. Isolation is opt-in via the schema-changes prompt /
+/// `--with-data` / `midas flow isolate` — branch type no longer implies a seeded pscale branch.
 pub const BRANCH_TYPES: &[&str] = &["feat", "fix", "chore", "docs", "spike"];
 
 pub fn valid_branch_type(t: &str) -> bool {
     BRANCH_TYPES.contains(&t)
-}
-
-/// feat/fix touch behavior or schema → seeded paired branch by default; the rest are git-only.
-pub fn seed_by_default(branch_type: &str) -> bool {
-    matches!(branch_type, "feat" | "fix")
 }
 
 /// Resolved flow configuration. Every field falls back to a midian default, so a fresh checkout runs
@@ -153,6 +148,33 @@ pub fn validate_slug(slug: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Pure isolation decision for `flow start`.
+/// `Ok(Some(v))` is final; `Ok(None)` means prompt the user; `Err` is a usage conflict.
+pub fn isolation_decision(
+    with_data: bool,
+    no_data: bool,
+    yes_flag: bool,
+    interactive: bool,
+) -> Result<Option<bool>, crate::core::exit::CliError> {
+    use crate::core::exit::CliError;
+    if with_data && no_data {
+        return Err(CliError::usage(
+            "--with-data and --no-data are mutually exclusive",
+        ));
+    }
+    if with_data {
+        return Ok(Some(true));
+    }
+    if no_data {
+        return Ok(Some(false));
+    }
+    // Non-interactive without an explicit flag: default to shared parent (cheap + safe).
+    if yes_flag || !interactive {
+        return Ok(Some(false));
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +208,31 @@ mod tests {
         assert!(!is_local_mysql_url(
             "mysql://user:pass@aws.connect.psdb.cloud:3306/app"
         ));
+    }
+
+    #[test]
+    fn isolation_decision_flags_win() {
+        assert_eq!(
+            isolation_decision(true, false, false, true).unwrap(),
+            Some(true)
+        );
+        assert_eq!(
+            isolation_decision(false, true, false, true).unwrap(),
+            Some(false)
+        );
+        assert!(isolation_decision(true, true, false, true).is_err());
+    }
+
+    #[test]
+    fn isolation_decision_defaults_noninteractive_to_shared() {
+        assert_eq!(
+            isolation_decision(false, false, true, true).unwrap(),
+            Some(false)
+        );
+        assert_eq!(
+            isolation_decision(false, false, false, false).unwrap(),
+            Some(false)
+        );
+        assert_eq!(isolation_decision(false, false, false, true).unwrap(), None);
     }
 }

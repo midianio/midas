@@ -45,8 +45,8 @@ agent-runnable contract is enforced once, centrally, not re-implemented per comm
 | `midas touch state\|migration\|component\|module <name>` | `--dir`, `--ui`, `--no-wire`, `--force` | stamped file paths (+ `pub mod` wiring for `module`) | 0 / 2 / 3 | **shipped** |
 | `midas touch handler\|pane …` | kind-specific | stamped file paths | 0 / 3 | next |
 | `midas touch project <name>` | `--profile`, `--dir`, `--force` | created project file list | 0 / 2 / 3 | **shipped** (incl. `rust-service` + `svelte-app` skeletons) |
-| `midas dev [names…]` | (globals only) | streamed prefixed process output | 0 / 1 / 3 | **shipped** (concurrent runner + pscale tunnel; auto-migrate; `[dev]` in midas.toml) |
-| `midas migrate [apply\|status]` | (globals only) | `{newly_applied, states[]}` | 0 / 1 / 2 / 3 | **shipped** (forward-only runner over the local tunnel; `_migrations` checksum ledger; OPS-0008/0009) |
+| `midas dev [names…]` | (globals only) | streamed prefixed process output | 0 / 1 / 3 | **shipped** (concurrent runner + pscale tunnel; auto-migrate when isolated; `[dev]` in midas.toml) |
+| `midas migrate [apply\|status]` | `--force` on apply | `{newly_applied, states[]}` | 0 / 1 / 2 / 3 | **shipped** (forward-only runner over the local tunnel; apply requires isolation unless `--force`; OPS-0008/0009) |
 | `midas setup` / `teardown` | `--no-db` / `--yes` | bootstrapped / torn down | 0 / 1 | later |
 | `midas gen types` | `--out` | written path | 0 / 1 | deferred |
 | `midas upgrade` | `--to <ver>`, `--dry-run` | applied codemods + residuals | 0 / 1 | deferred |
@@ -182,7 +182,9 @@ file already exists):
 ```
 
 Algorithm: find the delimiters; replace the span (or append if absent); never touch bytes outside it.
-`midas sync --check` (and `midas check`) flag a missing/stale-version block as `check`-tier drift.
+The stamp is the project's `midas.toml` `[standard].version` pin (else the binary's embedded
+standard) — one source of truth for AGT-0001 / `sync` / `doctor`. `midas sync --check` (and
+`midas check`) flag a missing/stale-version block as `check`-tier drift.
 
 ## Distribution
 

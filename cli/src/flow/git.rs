@@ -201,3 +201,18 @@ pub fn conflicted_files() -> Vec<String> {
         })
         .unwrap_or_default()
 }
+
+/// True when any path under `pathspec` differs between the working tree (incl. index) and
+/// `origin/<base>` (falls back to local `<base>`). Used to warn when migrations changed on a
+/// shared-parent session.
+pub fn pathspec_changed_vs(base: &str, pathspec: &str) -> bool {
+    let remote = format!("origin/{base}");
+    let base_ref = if capture("git", &["rev-parse", "--verify", "--quiet", &remote]).is_ok() {
+        remote
+    } else {
+        base.to_string()
+    };
+    capture("git", &["diff", "--name-only", &base_ref, "--", pathspec])
+        .map(|out| out.lines().any(|l| !l.is_empty()))
+        .unwrap_or(false)
+}

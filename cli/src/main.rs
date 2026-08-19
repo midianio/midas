@@ -47,7 +47,7 @@ enum Commands {
         #[arg(long)]
         kill_ports: bool,
     },
-    /// Release / branch flow: start · rebase · ship · tag · end · status · clean.
+    /// Release / branch flow: start · isolate · rebase · ship · tag · end · status · clean.
     Flow {
         #[command(subcommand)]
         cmd: FlowCmd,
@@ -165,7 +165,9 @@ fn main() {
             let manifest = Manifest::find(&start)?.map(|(m, _)| m).unwrap_or_default();
             cmd::flow::run(&ctx, &manifest, cmd)
         }
-        Commands::Migrate { cmd } => cmd::migrate::run(&ctx, cmd.unwrap_or(MigrateCmd::Apply)),
+        Commands::Migrate { cmd } => {
+            cmd::migrate::run(&ctx, cmd.unwrap_or(MigrateCmd::Apply { force: false }))
+        }
         Commands::Check { changed } => cmd::check::run(&ctx, changed),
         Commands::Drift {
             spec,

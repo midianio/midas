@@ -29,6 +29,16 @@ fn clean_fixture(root: &Path) {
         "app/web/src/lib/types/api.generated.ts",
         "export type paths = {};\n",
     );
+    // Pin matches the binary so AGT-0001's stamp (from the pin) stays current after sync.
+    write(
+        root,
+        "midas.toml",
+        &format!(
+            "[standard]\nversion = \"{}\"\nprofile = \"app\"\n\
+             [stack]\nbackend = {{ current = \"rust\" }}\nfrontend = {{ current = \"svelte\" }}\n",
+            env!("CARGO_PKG_VERSION")
+        ),
+    );
     midas().current_dir(root).arg("sync").assert().success();
 }
 
@@ -147,7 +157,10 @@ fn check_deviation_against_hard_rule_is_an_error() {
     write(
         dir.path(),
         "midas.toml",
-        "[standard]\nversion = \"0.2.0\"\n[deviations]\n\"BE-0010\" = \"we like bare clients\"\n",
+        &format!(
+            "[standard]\nversion = \"{}\"\n[deviations]\n\"BE-0010\" = \"we like bare clients\"\n",
+            env!("CARGO_PKG_VERSION")
+        ),
     );
     midas()
         .args(["check", "--root"])
@@ -233,7 +246,10 @@ fn check_ledgered_deviation_is_not_a_failure() {
     write(
         dir.path(),
         "midas.toml",
-        "[standard]\nversion = \"0.1.0\"\n[deviations]\n\"FE-0004\" = \"web-only\"\n",
+        &format!(
+            "[standard]\nversion = \"{}\"\n[deviations]\n\"FE-0004\" = \"web-only\"\n",
+            env!("CARGO_PKG_VERSION")
+        ),
     );
     midas()
         .args(["check", "--root"])
@@ -254,9 +270,12 @@ fn check_artifact_hash_ledgered_vs_hard() {
     write(
         dir.path(),
         "midas.toml",
-        "[standard]\nversion = \"0.4.1\"\n\
-         [stack]\nbackend = { current = \"rust\" }\nfrontend = { current = \"svelte\" }\n\
-         [deviations]\n\"BE-0014\" = \"no contract yet\"\n\"FE-0006\" = \"no contract yet\"\n",
+        &format!(
+            "[standard]\nversion = \"{}\"\n\
+             [stack]\nbackend = {{ current = \"rust\" }}\nfrontend = {{ current = \"svelte\" }}\n\
+             [deviations]\n\"BE-0014\" = \"no contract yet\"\n\"FE-0006\" = \"no contract yet\"\n",
+            env!("CARGO_PKG_VERSION")
+        ),
     );
 
     let out = midas()
@@ -293,7 +312,10 @@ fn check_artifact_hash_service_profile_skips_frontend_side() {
     write(
         dir.path(),
         "midas.toml",
-        "[standard]\nversion = \"0.4.1\"\n[stack]\nbackend = { current = \"rust\" }\n",
+        &format!(
+            "[standard]\nversion = \"{}\"\n[stack]\nbackend = {{ current = \"rust\" }}\n",
+            env!("CARGO_PKG_VERSION")
+        ),
     );
     midas()
         .current_dir(dir.path())
@@ -403,6 +425,60 @@ fn check_canon_context_frontmatter_and_size_cap() {
 }
 
 #[test]
+fn migrate_apply_refuses_shared_parent_without_force() {
+    // On a normal git checkout without a paired pscale branch, apply must refuse (exit 2)
+    // rather than hitting shared `dev` under safe migrations.
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "midas.toml",
+        &format!(
+            "[standard]\nversion = \"{}\"\n[flow]\ntrunk = \"main\"\npscale_parent = \"dev\"\n",
+            env!("CARGO_PKG_VERSION")
+        ),
+    );
+    // Init a tiny git repo on main so current_branch resolves.
+    assert!(std::process::Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap()
+        .success());
+    assert!(std::process::Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap()
+        .success());
+    assert!(std::process::Command::new("git")
+        .args(["config", "user.name", "test"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap()
+        .success());
+    write(dir.path(), "README.md", "x\n");
+    assert!(std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(dir.path())
+        .status()
+        .unwrap()
+        .success());
+    assert!(std::process::Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(dir.path())
+        .status()
+        .unwrap()
+        .success());
+
+    midas()
+        .args(["migrate", "apply", "--root"])
+        .arg(dir.path())
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("flow isolate"));
+}
+
+#[test]
 fn flow_help_is_flat() {
     // The cleaned-up flow group: verbs are direct, not nested under `db`, and the redundant
     // `hotfix`/`doctor` are gone.
@@ -411,6 +487,7 @@ fn flow_help_is_flat() {
         .assert()
         .success()
         .stdout(predicate::str::contains("start"))
+        .stdout(predicate::str::contains("isolate"))
         .stdout(predicate::str::contains("end"))
         .stdout(predicate::str::contains("status"))
         .stdout(predicate::str::contains("hotfix").not())
@@ -431,6 +508,71 @@ fn flow_tag_bad_version_is_usage_error() {
         .status
         .code();
     assert!(matches!(code, Some(1) | Some(2) | Some(3)));
+}
+
+#[test]
+fn sync_stamps_pinned_version_not_embedded() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "midas.toml",
+        "[standard]\nversion = \"9.9.9\"\n",
+    );
+    fs::write(dir.path().join("AGENTS.md"), "# Project\n").unwrap();
+
+    midas()
+        .arg("sync")
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let written = fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+    assert!(
+        written.contains("<!-- midas:9.9.9 -->"),
+        "sync must stamp the midas.toml pin, got:\n{written}"
+    );
+    assert!(
+        !written.contains("<!-- midas:0."),
+        "must not stamp the embedded binary version when a pin is set"
+    );
+}
+
+#[test]
+fn check_agt_0001_uses_pinned_version_not_embedded() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    write(
+        dir.path(),
+        "midas.toml",
+        "[standard]\nversion = \"9.9.9\"\nprofile = \"app\"\n\
+         [stack]\nbackend = { current = \"rust\" }\nfrontend = { current = \"svelte\" }\n",
+    );
+    midas()
+        .arg("sync")
+        .current_dir(dir.path())
+        .assert()
+        .success();
+    let stamped = fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+    assert!(
+        stamped.contains("<!-- midas:9.9.9 -->"),
+        "sync must stamp the pin before check"
+    );
+
+    let out = midas()
+        .args(["--json", "check", "--root"])
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let agt = v["mechanical"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "AGT-0001")
+        .expect("AGT-0001 present");
+    assert_eq!(
+        agt["outcome"], "pass",
+        "AGT-0001 must accept the pin stamp even when it differs from the embedded binary; got {agt}"
+    );
 }
 
 #[test]
@@ -1127,7 +1269,10 @@ fn deviate_prune_drops_dead_entries_and_keeps_live_ones() {
     write(
         dir.path(),
         "midas.toml",
-        "[standard]\nversion = \"0.2.0\"\n[deviations]\n\"ZZ-0001\" = \"from an old standard\"\n\"FE-0004\" = \"web-only\"\n",
+        &format!(
+            "[standard]\nversion = \"{}\"\n[deviations]\n\"ZZ-0001\" = \"from an old standard\"\n\"FE-0004\" = \"web-only\"\n",
+            env!("CARGO_PKG_VERSION")
+        ),
     );
     let out = midas()
         .args(["--json", "deviate", "--prune", "--root"])

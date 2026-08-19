@@ -16,7 +16,12 @@ use std::path::Path;
 #[derive(Subcommand)]
 pub enum MigrateCmd {
     /// Apply every pending migration in order (the default).
-    Apply,
+    Apply {
+        /// Allow applying even when the current git branch has no paired pscale branch
+        /// (targets shared parent — usually wrong under safe migrations).
+        #[arg(long)]
+        force: bool,
+    },
     /// Show which migrations are applied vs pending (read-only).
     Status,
 }
@@ -34,7 +39,8 @@ pub fn run(ctx: &Ctx, cmd: MigrateCmd) -> CliResult {
     let cfg = FlowConfig::from_manifest(&manifest);
     let url = resolve_url(&cfg)?;
     match cmd {
-        MigrateCmd::Apply => {
+        MigrateCmd::Apply { force } => {
+            require_isolated(&cfg, force)?;
             let report = block_on(migrate::apply(&url, &root)).map_err(to_cli_err)?;
             print_apply(ctx, &report);
             Ok(())
@@ -48,7 +54,7 @@ pub fn run(ctx: &Ctx, cmd: MigrateCmd) -> CliResult {
 }
 
 /// Apply pending migrations as part of `midas dev` (after the tunnel is up, before the app starts).
-/// Prints a concise line through `ctx.out`; a drift/apply failure aborts the caller.
+/// Prints a concise line through `ctx.out`; callers decide whether to abort on failure.
 pub fn apply_pending(ctx: &Ctx, manifest: &Manifest, root: &Path) -> CliResult {
     let cfg = FlowConfig::from_manifest(manifest);
     let url = resolve_url(&cfg)?;
@@ -62,6 +68,21 @@ pub fn apply_pending(ctx: &Ctx, manifest: &Manifest, root: &Path) -> CliResult {
         ));
     }
     Ok(())
+}
+
+/// Refuse `migrate apply` against shared parent unless `--force`.
+fn require_isolated(cfg: &FlowConfig, force: bool) -> Result<(), CliError> {
+    if force {
+        return Ok(());
+    }
+    let branch = crate::flow::git::current_branch().map_err(CliError::tool)?;
+    if crate::flow::pscale::is_data_isolated(cfg, &branch) {
+        return Ok(());
+    }
+    Err(CliError::expected(format!(
+        "refusing to migrate on shared `{}` — run `midas flow isolate` first (or pass --force)",
+        cfg.parent
+    )))
 }
 
 /// Resolve the sqlx URL and enforce the local-only guard (OPS-0009).

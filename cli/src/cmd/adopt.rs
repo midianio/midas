@@ -71,13 +71,14 @@ pub fn run(ctx: &Ctx, profile: Option<Profile>) -> CliResult {
     // 3. Standing violations: offer to ledger the ledgerable ones so the gate reflects intent.
     let (manifest, _) = Manifest::find(&root)?
         .ok_or_else(|| CliError::tool(anyhow::anyhow!("midas.toml vanished after write")))?;
+    let stamp = manifest.stamp_version(&registry.version).to_string();
     let mut scanner = Scanner::new(&root).map_err(CliError::tool)?;
     let mut ledgerable: Vec<String> = Vec::new();
     for conv in &registry.conventions {
         if conv.tier != Tier::Check || conv.escape != Escape::Ledgered {
             continue;
         }
-        let e = outcome_of(conv, &manifest, true, &mut scanner, &registry.version);
+        let e = outcome_of(conv, &manifest, true, &mut scanner, &stamp);
         if e.outcome == Outcome::Fail {
             ledgerable.push(conv.id.clone());
         }

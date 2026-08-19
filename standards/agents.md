@@ -43,8 +43,9 @@ its own `AGENTS.md`, `.cursor`). The standard injects shared guidance **without 
   ```
 
   **Project-specific content lives outside the block, untouched.** The block names the pinned version
-  and points at the conventions; a stale or missing `AGENTS.md` block is `check`-tier drift —
-  `midas check` fails it (AGT-0001, `managed-block` kind) and `midas sync` fixes it.
+  (`midas.toml` `[standard].version`; else the binary's embedded standard) and points at the
+  conventions; a stale or missing `AGENTS.md` block is `check`-tier drift — `midas check` fails it
+  (AGT-0001, `managed-block` kind) and `midas sync` fixes it.
 
 ### `AGT-0008` The required skill bundle `[review]`
 

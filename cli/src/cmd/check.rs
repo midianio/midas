@@ -67,6 +67,10 @@ pub fn run(ctx: &Ctx, changed_only: bool) -> CliResult {
         ));
     }
 
+    // AGT-0001 stamps/checks against the pin (falling back to embedded). Rules still come from the
+    // embedded registry — the pin is only the managed-block version of record.
+    let stamp = manifest.stamp_version(&registry.version).to_string();
+
     let mut scanner = Scanner::new(&root).map_err(CliError::tool)?;
     if changed_only {
         let changed = changed_files(&root, &FlowConfig::from_manifest(&manifest).trunk)?;
@@ -97,7 +101,7 @@ pub fn run(ctx: &Ctx, changed_only: bool) -> CliResult {
             &manifest,
             has_manifest,
             &mut scanner,
-            &registry.version,
+            &stamp,
         ));
     }
 
@@ -234,8 +238,8 @@ pub struct Eval {
 /// Classify a single convention against the tree, mirroring `check`'s logic: applicability →
 /// mechanical spec → findings → escape/ledger classification. `drift` calls this once per registry
 /// version to compute the before/after outcomes for the same working tree + ledger.
-/// `standard_version` is the version of the registry being evaluated (the managed-block check
-/// asserts the synced block is stamped with it).
+/// `standard_version` is the managed-block stamp to assert (the project's pin, or the registry
+/// version when `drift` evaluates a historical snapshot).
 pub fn outcome_of(
     conv: &Convention,
     manifest: &Manifest,

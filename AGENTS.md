@@ -35,6 +35,8 @@ the frozen history snapshot move together — a build-time test
 bumps `cli/Cargo.toml` and `registry/conventions.json`, freezes
 `registry/history/<ver>.json`, appends the `HISTORY` entry in `cli/src/registry.rs`, re-pins this
 repo's `midas.toml`, and refreshes the agent-doc managed blocks — then cuts the annotated tag.
+The pin in `midas.toml` is also what `midas sync` / AGT-0001 stamp and check against, so a tag bump
+stays check-clean even before the new binary is installed.
 
 1. Land the change via the normal flow: `midas flow start` → `midas flow ship` → review → merge to
    `main` (OPS-0001/OPS-0010).

@@ -98,6 +98,13 @@ pub fn run(ctx: &Ctx, only: Vec<String>, no_watch: bool, kill_ports: bool) -> Cl
     let color = !ctx.global.no_color
         && std::env::var_os("NO_COLOR").is_none()
         && std::io::stderr().is_terminal();
+
+    let mut migrate_failure: Option<String> = None;
+    let isolated = {
+        let gb = crate::proc::capture("git", &["branch", "--show-current"]).unwrap_or_default();
+        let gb = gb.trim();
+        !gb.is_empty() && crate::flow::pscale::is_data_isolated(&cfg, gb)
+    };
     let width = procs.iter().map(|p| p.name.len()).max().unwrap_or(3);
 
     // Ctrl-C just flips the flag; the main loop owns teardown (no killing in signal context).
@@ -156,18 +163,34 @@ pub fn run(ctx: &Ctx, only: Vec<String>, no_watch: bool, kill_ports: bool) -> Cl
         }
 
         // Gate the rest of the processes on the tunnel actually listening, then bring the schema up
-        // to date before the app starts (so a fresh/seeded branch has its migrations applied).
+        // to date before the app starts — but only when data-isolated (paired pscale branch).
         if i == 0 {
             if let Some(port) = tunnel_port {
                 if wait_for_port(port, Duration::from_secs(20), &shutdown) {
                     if manifest.dev.migrate {
-                        if let Err(e) = crate::cmd::migrate::apply_pending(ctx, &manifest, &root) {
-                            ctx.out.error(format!("migrate: {e}"));
-                            group.teardown(&mut children);
-                            for r in readers {
-                                let _ = r.join();
+                        if isolated {
+                            if let Err(e) =
+                                crate::cmd::migrate::apply_pending(ctx, &manifest, &root)
+                            {
+                                ctx.out.warn(format!("migrate failed: {e}"));
+                                migrate_failure = Some(e.to_string());
                             }
-                            return Err(e);
+                        } else {
+                            ctx.out.step(format!(
+                                "skipping migrate — shared `{}` (not isolated)",
+                                cfg.parent
+                            ));
+                            if crate::flow::git::pathspec_changed_vs(
+                                &cfg.trunk,
+                                crate::flow::migrate::MIGRATIONS_DIR,
+                            ) {
+                                ctx.out.warn(format!(
+                                    "{} changed vs {} — run `midas flow isolate` then restart \
+                                     (or `midas migrate apply` on an isolated branch)",
+                                    crate::flow::migrate::MIGRATIONS_DIR,
+                                    cfg.trunk
+                                ));
+                            }
                         }
                     }
                 } else {
@@ -248,6 +271,9 @@ pub fn run(ctx: &Ctx, only: Vec<String>, no_watch: bool, kill_ports: bool) -> Cl
     if shutdown.load(Ordering::SeqCst) {
         ctx.out.step("shutting down");
     }
+    if let Some(msg) = &migrate_failure {
+        ctx.out.warn(format!("migrate failed earlier: {msg}"));
+    }
     group.teardown(&mut children);
     for r in readers {
         let _ = r.join();
@@ -256,9 +282,8 @@ pub fn run(ctx: &Ctx, only: Vec<String>, no_watch: bool, kill_ports: bool) -> Cl
 }
 
 /// Resolve the tunnel branch: explicit override, else the paired branch for the current git branch
-/// (when one actually exists on pscale), else the `[flow]` parent. Git-only branch types
-/// (`chore`/`docs`/`spike`) never get a paired pscale branch, so connecting to their derived name
-/// would fail with "branch … does not exist" — those fall back to the parent (`dev` by default).
+/// (when one actually exists on pscale), else the `[flow]` parent. Missing paired branches fall
+/// back silently — isolation is opt-in (`flow start` schema prompt / `--with-data` / `flow isolate`).
 fn tunnel_branch(ctx: &Ctx, m: &Manifest, cfg: &FlowConfig) -> String {
     if let Some(b) = &m.dev.branch {
         return b.clone();
@@ -270,8 +295,8 @@ fn tunnel_branch(ctx: &Ctx, m: &Manifest, cfg: &FlowConfig) -> String {
             if crate::flow::pscale::branch_exists(cfg, &paired) {
                 return paired;
             }
-            ctx.out.warn(format!(
-                "pscale branch {paired:?} does not exist — falling back to {:?}",
+            ctx.out.info(format!(
+                "no paired pscale branch {paired:?} — tunnel uses shared `{}`",
                 cfg.parent
             ));
         }

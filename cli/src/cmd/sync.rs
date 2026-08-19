@@ -5,6 +5,7 @@
 
 use crate::core::exit::{CliError, CliResult};
 use crate::core::Ctx;
+use crate::manifest::Manifest;
 use crate::registry::Registry;
 use serde::Serialize;
 use serde_json::json;
@@ -43,17 +44,27 @@ struct Target {
     status: BlockStatus,
 }
 
+/// Resolve the stamp version for `root`: `[standard].version` when pinned, else the binary's
+/// embedded standard. Sync, AGT-0001, and doctor all share this — one pin across files.
+pub(crate) fn stamp_version_for(root: &std::path::Path) -> String {
+    let embedded = Registry::embedded()
+        .map(|r| r.version)
+        .unwrap_or_else(|_| "0.0.0".into());
+    match Manifest::find(root) {
+        Ok(Some((m, _))) => m.stamp_version(&embedded).to_string(),
+        _ => embedded,
+    }
+}
+
 /// Write the managed block into every agent doc under `root` (no output). Returns
 /// `(version, changed targets)` — the quiet core `run` and `midas adopt` share.
 pub(crate) fn write_blocks(root: &std::path::Path) -> Result<(String, Vec<String>), CliError> {
-    let version = Registry::embedded()
-        .map(|r| r.version)
-        .unwrap_or_else(|_| "0.0.0".into());
+    let version = stamp_version_for(root);
     write_blocks_at_version(root, &version)
 }
 
 /// Like [`write_blocks`], but stamps agent docs with an explicit version (used by the release
-/// bump before the binary is rebuilt with the new embedded registry).
+/// bump, which already wrote the pin and needs the matching stamp before the binary rebuilds).
 pub(crate) fn write_blocks_at_version(
     root: &std::path::Path,
     version: &str,
@@ -95,9 +106,7 @@ pub(crate) fn agents_frontmatter() -> String {
 
 pub fn run(ctx: &Ctx, check_only: bool) -> CliResult {
     let root = crate::manifest::resolve_root(&ctx.global)?;
-    let version = Registry::embedded()
-        .map(|r| r.version)
-        .unwrap_or_else(|_| "0.0.0".into());
+    let version = stamp_version_for(&root);
     let block = managed_block(&version);
 
     let mut targets: Vec<Target> = Vec::new();

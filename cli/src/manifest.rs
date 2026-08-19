@@ -174,4 +174,16 @@ impl Manifest {
             None => Ok(None),
         }
     }
+
+    /// Version agent docs must stamp (AGT-0001 / `midas sync`). Prefers `[standard].version` when
+    /// set; otherwise `fallback` (normally the binary's embedded standard). The pin — not the
+    /// binary — is the single source of truth for the managed-block stamp, so a midas self-release
+    /// that bumps `midas.toml` ahead of the installed binary stays check-clean.
+    pub fn stamp_version<'a>(&'a self, fallback: &'a str) -> &'a str {
+        if self.standard.version.is_empty() {
+            fallback
+        } else {
+            &self.standard.version
+        }
+    }
 }

@@ -102,6 +102,7 @@ fn prune_ledger(ctx: &Ctx, root: &Path, path: &Path) -> CliResult {
         return Ok(());
     }
     let registry = Registry::embedded().map_err(CliError::tool)?;
+    let stamp = manifest.stamp_version(&registry.version).to_string();
     let mut scanner = Scanner::new(root).map_err(CliError::tool)?;
 
     let mut pruned: Vec<String> = Vec::new();
@@ -113,7 +114,7 @@ fn prune_ledger(ctx: &Ctx, root: &Path, path: &Path) -> CliResult {
                 kept.push((id.clone(), "review-tier (not mechanically verifiable)"))
             }
             Some(c) => {
-                let e = outcome_of(c, &manifest, true, &mut scanner, &registry.version);
+                let e = outcome_of(c, &manifest, true, &mut scanner, &stamp);
                 match e.outcome {
                     Outcome::Pass => pruned.push(id.clone()),
                     Outcome::Skipped => {
