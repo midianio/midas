@@ -65,6 +65,10 @@ enum Commands {
         /// Structure checks still run repo-wide; CI should keep running the full scan.
         #[arg(long)]
         changed: bool,
+        /// Attribution / `--changed` base (default: `origin/<trunk>`). Use the PR base for
+        /// stacked branches so inherited drift is billed to the commit that introduced it.
+        #[arg(long)]
+        base: Option<String>,
     },
     /// Explain standard drift: what changes for this repo if the pinned standard moves (read-only).
     Drift {
@@ -168,7 +172,7 @@ fn main() {
         Commands::Migrate { cmd } => {
             cmd::migrate::run(&ctx, cmd.unwrap_or(MigrateCmd::Apply { force: false }))
         }
-        Commands::Check { changed } => cmd::check::run(&ctx, changed),
+        Commands::Check { changed, base } => cmd::check::run(&ctx, changed, base),
         Commands::Drift {
             spec,
             from_file,

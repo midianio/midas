@@ -226,9 +226,9 @@ Full conventions live in `backend/`/`frontend/`; the process rules:
 ## Pre-commit, secrets, deploy
 
 - **OPS-0011 [check]** — Husky pre-commit runs `lint-staged` → Prettier, then `midas -y --no-color
-  check` (`.husky/pre-commit`; the midas step is skipped cleanly when the binary isn't installed, so
-  CI stays the hard gate). Don't bypass with `--no-verify`; fix the lint or fix the hook in its own
-  PR (`README.md`, "Things that will save you pain").
+  check` (`.husky/pre-commit`). If `midas` is not installed the hook must print a warning and
+  continue — a silent skip hides local-green-vs-CI-red. Don't bypass with `--no-verify`; fix the
+  lint or fix the hook in its own PR (`README.md`, "Things that will save you pain").
 - **OPS-0012 [check]** — `.env`/`.env.*` are gitignored except `.env.example`/`.env.test`
   (`.gitignore`); `app/api/.env` holds dev-only creds, has no template, and is **not** tracked — you
   get it from a teammate or 1Password. Never force-push `main`/`dev` — revert with a new commit

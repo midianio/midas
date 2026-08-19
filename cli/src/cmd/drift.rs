@@ -29,6 +29,7 @@ enum State {
     Fail,
     Ledgered,
     Advisory,
+    Inherited,
     Skipped,
     Absent,
 }
@@ -40,6 +41,7 @@ impl State {
             Outcome::Fail => State::Fail,
             Outcome::Ledgered => State::Ledgered,
             Outcome::Advisory => State::Advisory,
+            Outcome::Inherited => State::Inherited,
             Outcome::Skipped => State::Skipped,
         }
     }
@@ -49,6 +51,7 @@ impl State {
             State::Fail => "fail",
             State::Ledgered => "ledgered",
             State::Advisory => "advisory",
+            State::Inherited => "inherited",
             State::Skipped => "skipped",
             State::Absent => "absent",
         }
@@ -458,6 +461,13 @@ fn classify(
                 Class::Informational,
                 Action::Review,
                 format!("new advisory convention at {to_ver}; you have findings (never blocks)"),
+            ),
+            State::Inherited => some(
+                Class::Informational,
+                Action::Review,
+                format!(
+                    "new at {to_ver}; findings are inherited trunk debt (never blocks this PR)"
+                ),
             ),
             _ => some(
                 Class::Informational,

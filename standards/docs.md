@@ -103,6 +103,13 @@ nobody touched is fine; a 3-day-old doc about a module that moved yesterday is n
 expiry fails PRs unrelated to the doc and — worse — rewards bumping the date without re-reading,
 which launders staleness into the appearance of freshness and makes the signal worse than absent.
 
+On a PR the finding is attributed to the commit that moved the *source*, not to whether the
+branch edited the doc. A change already on the PR's base (`origin/<trunk>`, or `--base`) is
+**inherited trunk debt**: reported, not gated — the PR that landed the source owns the re-read.
+A change this branch introduced still fails. Without a resolvable base (no `origin/<trunk>`,
+or the check is running on trunk itself) the check stays absolute, so trunk cannot accumulate
+silent debt. `findings[].origin` is `trunk` or `branch` when attribution ran.
+
 `last_reviewed` means **someone re-read it**. Bumping it as a side effect of an unrelated edit is
 the one way to defeat this entry, and no check can catch it. That one is on the reviewer.
 

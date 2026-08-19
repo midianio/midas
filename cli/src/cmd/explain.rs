@@ -250,7 +250,7 @@ fn spec_line(spec: &CheckSpec) -> String {
                 format!("; enforcement waits {grace_days} days after the source change")
             };
             format!(
-                "source-drift: {} are stale when a declared `sources:` glob changed after `last_reviewed`, including via another stale doc they list{req}{grace}",
+                "source-drift: {} are stale when a declared `sources:` glob changed after `last_reviewed`, including via another stale doc they list; drift inherited from the PR base is reported, not gated{req}{grace}",
                 globs.join(", ")
             )
         }
@@ -262,7 +262,7 @@ fn spec_line(spec: &CheckSpec) -> String {
                 "encoding" => "names match <kind>.<scope>.<slug>[.date].md, sit in the directory their kind implies, and agree with their frontmatter",
                 "frontmatter" => "required keys per kind, a legal status, and `sources` on anything canon",
                 "citations" => "source files cite ref/ or decisions/ docs only — never a plan or an archived note",
-                "drift" => "a canon doc whose declared `sources` changed after its `last_reviewed`, including via another stale doc they list",
+                "drift" => "a canon doc whose declared `sources` changed after its `last_reviewed`, including via another stale doc they list; drift inherited from the PR base is reported, not gated",
                 other => other,
             };
             format!("doc-lifecycle ({rule}) over {root}/: {what}")

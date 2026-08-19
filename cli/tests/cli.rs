@@ -2248,3 +2248,419 @@ fn drift_is_skipped_on_a_shallow_clone() {
         "with truncated history the check must stay silent, not invent dates"
     );
 }
+
+/// Opt a fixture into DOC and pin trunk to `main` so `origin/main` is the attribution base.
+fn opt_in_docs(root: &Path) {
+    let manifest = fs::read_to_string(root.join("midas.toml")).unwrap_or_default();
+    write(
+        root,
+        "midas.toml",
+        &format!("{manifest}\n[docs]\nscopes = [\"api\"]\n[flow]\ntrunk = \"main\"\n"),
+    );
+}
+
+fn canon_ref(root: &Path, slug: &str, sources: &str, reviewed: &str) {
+    write(
+        root,
+        &format!("docs/ref.api.{slug}.md"),
+        &format!(
+            "---\nkind: ref\nscope: api\nstatus: current\nowner: x\nlast_reviewed: {reviewed}\ncanon: true\nsources:\n  - {sources}\n---\n\n# {slug}\n"
+        ),
+    );
+}
+
+fn git(dir: &Path, args: &[&str], when: Option<&str>) {
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C").arg(dir).args(args);
+    if let Some(when) = when {
+        cmd.env("GIT_AUTHOR_DATE", when);
+        cmd.env("GIT_COMMITTER_DATE", when);
+    }
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn git_sha(dir: &Path) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn init_git(dir: &Path) {
+    git(dir, &["init", "-q"], None);
+    git(dir, &["config", "user.email", "t@example.com"], None);
+    git(dir, &["config", "user.name", "t"], None);
+}
+
+fn check_json(dir: &Path, extra: &[&str]) -> (i32, serde_json::Value) {
+    let out = midas()
+        .args(["--json", "check"])
+        .args(extra)
+        .args(["--root"])
+        .arg(dir)
+        .output()
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or(serde_json::json!({}));
+    (out.status.code().unwrap_or(1), v)
+}
+
+fn result_named<'a>(v: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+    v["mechanical"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == id)
+        .unwrap_or_else(|| panic!("missing {id} in {}", v["mechanical"]["results"]))
+}
+
+#[test]
+fn check_doc_drift_inherited_from_trunk_does_not_block() {
+    // Trunk moved a source after last_reviewed. This branch touches neither the doc nor
+    // the source. That's trunk debt — report it, don't gate.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    opt_in_docs(dir.path());
+    canon_ref(dir.path(), "thing", "app/api/src/**", "1999-01-01");
+    init_git(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "seed"],
+        Some(&git_stamp_days_ago(20)),
+    );
+    write(
+        dir.path(),
+        "app/api/src/main.rs",
+        "fn main() { /* moved */ }\n",
+    );
+    git(dir.path(), &["add", "app/api/src/main.rs"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "trunk source"],
+        Some(&git_stamp_days_ago(10)),
+    );
+    let trunk = git_sha(dir.path());
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/main", &trunk],
+        None,
+    );
+    git(dir.path(), &["checkout", "-q", "-b", "feat"], None);
+    write(dir.path(), "NOTES.md", "unrelated\n");
+    git(dir.path(), &["add", "NOTES.md"], None);
+    git(dir.path(), &["commit", "-qm", "unrelated"], None);
+
+    let (code, v) = check_json(dir.path(), &[]);
+    let r = result_named(&v, "DOC-0004");
+    assert_eq!(
+        r["outcome"], "inherited",
+        "trunk-caused drift is not a fail: {r}"
+    );
+    assert_eq!(code, 0, "inherited must not set the exit code");
+    let findings = r["findings"].as_array().unwrap();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f["file"] == "docs/ref.api.thing.md" && f["origin"] == "trunk"),
+        "the finding must name origin=trunk: {findings:?}"
+    );
+    assert!(
+        v["mechanical"]["inherited"].as_u64().unwrap() >= 1,
+        "tally must count inherited"
+    );
+}
+
+#[test]
+fn check_doc_drift_introduced_on_branch_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    opt_in_docs(dir.path());
+    canon_ref(dir.path(), "thing", "app/api/src/**", "1999-01-01");
+    init_git(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "seed"],
+        Some(&git_stamp_days_ago(20)),
+    );
+    let trunk = git_sha(dir.path());
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/main", &trunk],
+        None,
+    );
+    git(dir.path(), &["checkout", "-q", "-b", "feat"], None);
+    write(
+        dir.path(),
+        "app/api/src/main.rs",
+        "fn main() { /* branch */ }\n",
+    );
+    git(dir.path(), &["add", "app/api/src/main.rs"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "branch source"],
+        Some(&git_stamp_days_ago(1)),
+    );
+
+    let (code, v) = check_json(dir.path(), &[]);
+    let r = result_named(&v, "DOC-0004");
+    assert_eq!(r["outcome"], "fail");
+    assert_eq!(code, 2);
+    let findings = r["findings"].as_array().unwrap();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f["file"] == "docs/ref.api.thing.md" && f["origin"] == "branch"),
+        "the finding must name origin=branch: {findings:?}"
+    );
+}
+
+#[test]
+fn check_doc_drift_mixed_origins_fails() {
+    // Two docs, two sources: trunk moved one, this branch moved the other.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    opt_in_docs(dir.path());
+    canon_ref(dir.path(), "api", "app/api/src/**", "1999-01-01");
+    canon_ref(dir.path(), "web", "app/web/src/**", "1999-01-01");
+    init_git(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "seed"],
+        Some(&git_stamp_days_ago(20)),
+    );
+    write(
+        dir.path(),
+        "app/api/src/main.rs",
+        "fn main() { /* trunk */ }\n",
+    );
+    git(dir.path(), &["add", "app/api/src/main.rs"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "trunk api"],
+        Some(&git_stamp_days_ago(10)),
+    );
+    let trunk = git_sha(dir.path());
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/main", &trunk],
+        None,
+    );
+    git(dir.path(), &["checkout", "-q", "-b", "feat"], None);
+    write(
+        dir.path(),
+        "app/web/src/lib/utils.ts",
+        "export const x = 2;\n",
+    );
+    git(dir.path(), &["add", "app/web/src/lib/utils.ts"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "branch web"],
+        Some(&git_stamp_days_ago(1)),
+    );
+
+    let (code, v) = check_json(dir.path(), &[]);
+    let r = result_named(&v, "DOC-0004");
+    assert_eq!(
+        r["outcome"], "fail",
+        "one branch-origin finding keeps the fail"
+    );
+    assert_eq!(code, 2);
+    let findings = r["findings"].as_array().unwrap();
+    let origin_of = |file: &str| -> Option<&str> {
+        findings
+            .iter()
+            .find(|f| f["file"] == file)
+            .and_then(|f| f["origin"].as_str())
+    };
+    assert_eq!(origin_of("docs/ref.api.api.md"), Some("trunk"));
+    assert_eq!(origin_of("docs/ref.api.web.md"), Some("branch"));
+}
+
+#[test]
+fn check_doc_drift_without_base_stays_absolute() {
+    // No origin/<trunk>, no --base: attribution is off, stale docs still fail.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    opt_in_docs(dir.path());
+    canon_ref(dir.path(), "thing", "app/api/src/**", "1999-01-01");
+    init_git(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(dir.path(), &["commit", "-qm", "seed"], None);
+
+    let (code, v) = check_json(dir.path(), &[]);
+    let r = result_named(&v, "DOC-0004");
+    assert_eq!(r["outcome"], "fail");
+    assert_eq!(code, 2);
+    let origin = &r["findings"][0]["origin"];
+    assert!(
+        origin.is_null(),
+        "no baseline means no origin field: {origin}"
+    );
+}
+
+#[test]
+fn check_doc_drift_on_trunk_stays_absolute() {
+    // origin/main == HEAD: we *are* trunk. Absolute, so trunk cannot accumulate silent debt.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    opt_in_docs(dir.path());
+    canon_ref(dir.path(), "thing", "app/api/src/**", "1999-01-01");
+    init_git(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(dir.path(), &["commit", "-qm", "seed"], None);
+    let head = git_sha(dir.path());
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/main", &head],
+        None,
+    );
+
+    let (code, v) = check_json(dir.path(), &[]);
+    let r = result_named(&v, "DOC-0004");
+    assert_eq!(r["outcome"], "fail");
+    assert_eq!(code, 2);
+}
+
+#[test]
+fn check_doc_drift_base_flag_overrides_origin() {
+    // No origin/main; `--base` names the fork point so attribution still runs.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    opt_in_docs(dir.path());
+    canon_ref(dir.path(), "thing", "app/api/src/**", "1999-01-01");
+    init_git(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "seed"],
+        Some(&git_stamp_days_ago(20)),
+    );
+    write(
+        dir.path(),
+        "app/api/src/main.rs",
+        "fn main() { /* moved */ }\n",
+    );
+    git(dir.path(), &["add", "app/api/src/main.rs"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "base source"],
+        Some(&git_stamp_days_ago(10)),
+    );
+    let base = git_sha(dir.path());
+    git(dir.path(), &["checkout", "-q", "-b", "feat"], None);
+    write(dir.path(), "NOTES.md", "unrelated\n");
+    git(dir.path(), &["add", "NOTES.md"], None);
+    git(dir.path(), &["commit", "-qm", "unrelated"], None);
+
+    let (code, v) = check_json(dir.path(), &["--base", &base]);
+    let r = result_named(&v, "DOC-0004");
+    assert_eq!(r["outcome"], "inherited", "{r}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn check_doc_drift_cascade_inherits_upstream_origin() {
+    // B lists A. A is stale from a trunk source move. B's origin follows A.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    opt_in_docs(dir.path());
+    canon_ref(dir.path(), "core", "app/api/src/**", "1999-01-01");
+    canon_ref(
+        dir.path(),
+        "index",
+        "docs/ref.api.core.md",
+        &ymd_days_ago(20),
+    );
+    init_git(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "seed"],
+        Some(&git_stamp_days_ago(20)),
+    );
+    write(
+        dir.path(),
+        "app/api/src/main.rs",
+        "fn main() { /* trunk */ }\n",
+    );
+    git(dir.path(), &["add", "app/api/src/main.rs"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "trunk source"],
+        Some(&git_stamp_days_ago(10)),
+    );
+    let trunk = git_sha(dir.path());
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/main", &trunk],
+        None,
+    );
+    git(dir.path(), &["checkout", "-q", "-b", "feat"], None);
+    write(dir.path(), "NOTES.md", "unrelated\n");
+    git(dir.path(), &["add", "NOTES.md"], None);
+    git(dir.path(), &["commit", "-qm", "unrelated"], None);
+
+    let (code, v) = check_json(dir.path(), &[]);
+    let r = result_named(&v, "DOC-0004");
+    assert_eq!(r["outcome"], "inherited");
+    assert_eq!(code, 0);
+    let findings = r["findings"].as_array().unwrap();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f["file"] == "docs/ref.api.core.md" && f["origin"] == "trunk"),
+        "A is directly stale from trunk: {findings:?}"
+    );
+    assert!(
+        findings.iter().any(|f| {
+            f["file"] == "docs/ref.api.index.md"
+                && f["origin"] == "trunk"
+                && f["text"].as_str().unwrap().contains("docs/ref.api.core.md")
+        }),
+        "B inherits A's origin: {findings:?}"
+    );
+}
+
+#[test]
+fn check_failure_line_follows_the_report_when_piped() {
+    // stdout is block-buffered when piped; without a flush the stderr `✗ N mechanical
+    // violation(s)` lands mid-report. Same file for both streams is how CI logs them.
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "app/web/src/lib/thing.ts",
+        "export const id = () => crypto.randomUUID();\n",
+    );
+    let log = dir.path().join("combined.log");
+    let file = fs::File::create(&log).unwrap();
+    let bin = assert_cmd::cargo::cargo_bin("midas");
+    let status = std::process::Command::new(&bin)
+        .args(["--no-color", "check", "--root"])
+        .arg(dir.path())
+        .stdout(file.try_clone().unwrap())
+        .stderr(file)
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(2));
+    let text = fs::read_to_string(&log).unwrap();
+    let summary = text
+        .find("passed ·")
+        .unwrap_or_else(|| panic!("summary missing from:\n{text}"));
+    let footer = text
+        .find("mechanical violation")
+        .unwrap_or_else(|| panic!("footer missing from:\n{text}"));
+    assert!(
+        footer > summary,
+        "footer must follow the summary so it cannot attach to the wrong convention:\n{text}"
+    );
+}
