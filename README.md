@@ -38,8 +38,8 @@ code** (the midian Rust backend + Svelte frontend, and the `midflow` release CLI
 ```sh
 midas flow ship                 # release/branch flow: start·rebase·ship·tag·end·status·clean — shipped
 midas check                     # mechanical lint vs the pinned standard; report drift     — shipped
-                                #   (--changed = fast pre-commit pass; review-tier conventions
-                                #    are delegated to your review agent)
+                                #   (--changed = fast pre-commit pass; pair/structure checks
+                                #    stay repo-wide. Review-tier conventions are delegated.)
 midas drift                     # read-only briefing: what changes for this repo if the standard moves — shipped
                                 #   (pinned→embedded outcome diff: blocking / action / ledger cleanup)
 midas sync                      # refresh the version-stamped agent managed-block in this repo — shipped

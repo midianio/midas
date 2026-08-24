@@ -95,6 +95,12 @@ pub struct FlowCfg {
     pub tunnel_port: Option<u16>,
     pub api_env_local: Option<String>,
     pub env_marker: Option<String>,
+    /// Bases that are intentional promotions, not wrong-base PRs (e.g. `["main"]` when
+    /// trunk is `dev`). `flow ship` will not retarget a PR already aimed at one of these.
+    #[serde(default)]
+    pub promotion_bases: Vec<String>,
+    /// When `false`, draft PRs are omitted from overlap warnings. Default: include drafts.
+    pub overlap_drafts: Option<bool>,
 }
 
 /// `[dev]` — `midas dev` runs `processes` concurrently with prefixed output and one-Ctrl-C teardown.

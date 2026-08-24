@@ -114,11 +114,16 @@ silent debt. `findings[].origin` is `trunk` or `branch` when attribution ran.
 the one way to defeat this entry, and no check can catch it. That one is on the reviewer.
 
 Dates come from committed history, so a doc never fails for a change that hasn't landed.
-**CI needs full history.** Drift is computed from git log, so a shallow checkout (the
-`actions/checkout` default) can only see the head commit and would date every path to today. The
-check detects a shallow repository and reports nothing rather than inventing dates — so a CI job
-that wants this enforced must fetch full history (`fetch-depth: 0`). Silence here means "could not
-tell", not "clean".
+Comparison is **UTC calendar dates**: a source commit and `last_reviewed` on the same UTC day
+do not fail because one value has a timestamp. **CI needs full history.** Drift is computed
+from git log, so a shallow checkout (the `actions/checkout` default) can only see the head
+commit and would date every path to today. The check detects a shallow repository and
+**skips** date-based DOC/AGT drift with `skip_reason: "shallow-history"` rather than inventing
+dates or reporting a pass — so a CI job that wants this enforced must fetch full history
+(`fetch-depth: 0`). `skipped` here means "could not tell", not "clean".
+
+On a mixed run, only branch-origin findings fail the convention; inherited refs stay visible
+as `origin: trunk` warnings and do not set the exit code by themselves.
 
 ## Adopting
 
