@@ -239,8 +239,6 @@ mod tests {
 "#,
         )
         .unwrap();
-        fs::write(root.join("CLAUDE.md"), "# Project\n").unwrap();
-
         let out = crate::core::output::Output::new(&crate::core::global::GlobalArgs {
             quiet: true,
             ..Default::default()
@@ -249,7 +247,7 @@ mod tests {
         let state = read_state(root).unwrap();
         assert!(state.matches("0.4.1"));
         assert!(root.join("registry/history/0.4.1.json").is_file());
-        let claude = fs::read_to_string(root.join("CLAUDE.md")).unwrap();
-        assert!(claude.contains("midas:0.4.1"));
+        let agents = fs::read_to_string(root.join("AGENTS.md")).unwrap();
+        assert!(agents.contains("midas:0.4.1"));
     }
 }

@@ -99,7 +99,6 @@ pub fn run(
         ("midas.toml".into(), manifest_toml(&version, profile)),
         ("README.md".into(), readme(&name, profile)),
         (".gitignore".into(), GITIGNORE.to_string()),
-        ("CLAUDE.md".into(), format!("# {name}\n\n{block}\n")),
         (
             "AGENTS.md".into(),
             format!("{}# {name}\n\n{block}\n", agents_frontmatter()),

@@ -1,5 +1,5 @@
 {
-  "version": "0.8.2",
+  "version": "0.8.1",
   "conventions": [
     { "id": "STK-0001", "title": "Backend = Rust (axum 0.8 · tokio · sqlx 0.8 · utoipa).", "layer": "stack", "tier": "review", "escape": "ledgered", "doc": "stack.md" },
     { "id": "STK-0002", "title": "Frontend = SvelteKit 2 + Svelte 5 runes; package manager = Bun.", "layer": "stack", "tier": "review", "escape": "ledgered", "doc": "stack.md" },

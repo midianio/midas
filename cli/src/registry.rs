@@ -30,6 +30,8 @@ const HISTORY: &[(&str, &str)] = &[
     ("0.7.6", include_str!("../../registry/history/0.7.6.json")),
     ("0.7.7", include_str!("../../registry/history/0.7.7.json")),
     ("0.8.0", include_str!("../../registry/history/0.8.0.json")),
+    ("0.8.1", include_str!("../../registry/history/0.8.1.json")),
+    ("0.8.2", include_str!("../../registry/history/0.8.2.json")),
 ];
 
 #[derive(Debug, Deserialize)]
@@ -106,7 +108,7 @@ pub enum CheckSpec {
     },
     /// The version-stamped `midas sync` managed block must be present and current in `AGENTS.md`,
     /// stamped with the project's pinned standard version (`midas.toml [standard].version`, else
-    /// the embedded binary version). `CLAUDE.md` is not required.
+    /// the embedded binary version).
     ManagedBlock {},
     /// Both halves of a generated-artifact pair (the source of truth and the generated output) must
     /// be committed — i.e. tracked and not gitignored. This is the mechanical half of "regenerated &

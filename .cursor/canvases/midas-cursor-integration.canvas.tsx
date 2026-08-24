@@ -76,7 +76,7 @@ const COMMANDS: {
   {
     area: "Standard",
     cmd: "sync [--check]",
-    role: "Managed block in AGENTS.md / CLAUDE.md",
+    role: "Managed block in AGENTS.md",
     agent: "CI + doctor",
   },
   {
@@ -160,7 +160,7 @@ const OWNERSHIP: {
     why: "Per project",
   },
   {
-    concern: "Managed block in AGENTS.md / CLAUDE.md",
+    concern: "Managed block in AGENTS.md",
     owner: "midas",
     where: "midas sync (repo files)",
     why: "Version-stamped, git-visible, CI-checkable",
@@ -309,7 +309,7 @@ function Overview() {
         <CardBody>
           <Text weight="semibold">Team Rules → Project Rules → User Rules</Text>
           <Text tone="secondary" size="small">
-            AGENTS.md / CLAUDE.md (incl. midas sync block) load as project-layer
+            AGENTS.md (incl. midas sync block) loads as project-layer
             context. Do not duplicate the managed block into Always Apply .mdc
             or Team Rules.
           </Text>
@@ -325,7 +325,7 @@ function Overview() {
   Bugbot Team Rules: AGT-0006
 
 Repo
-  AGENTS.md / CLAUDE.md  ← midas sync block
+  AGENTS.md              ← midas sync block
   midas.toml             ← pin, stack, deviations
   .claude/skills/*/      ← AGT-0008 local how-tos
   .cursor/environment.json, hooks  ← boot / soft nudges`}</Code>
@@ -405,7 +405,7 @@ function Layers() {
             <Row gap={8} align="center">
               <Pill tone="success">2 · Midas sync</Pill>
               <Text>
-                Version-stamped block in AGENTS.md / CLAUDE.md (pin + pointers)
+                Version-stamped block in AGENTS.md (pin + pointers)
               </Text>
             </Row>
             <Row gap={8} align="center">
