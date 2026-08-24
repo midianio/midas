@@ -61,6 +61,69 @@ pub fn rebase_onto(trunk: &str) -> Result<()> {
     inherit("git", &["rebase", &format!("origin/{trunk}")])
 }
 
+/// `GIT_EDITOR=true` so continue does not open a pager/editor.
+pub fn rebase_continue() -> Result<()> {
+    let status = std::process::Command::new("git")
+        .env("GIT_EDITOR", "true")
+        .args(["-c", "core.editor=true", "rebase", "--continue"])
+        .status()
+        .map_err(|e| anyhow::anyhow!("git rebase --continue: {e}"))?;
+    if !status.success() {
+        anyhow::bail!(
+            "git rebase --continue exited with status {}",
+            status.code().unwrap_or(-1)
+        );
+    }
+    Ok(())
+}
+
+pub fn rebase_in_progress() -> bool {
+    let exists = |kind: &str| {
+        capture("git", &["rev-parse", "--git-path", kind])
+            .ok()
+            .map(|p| std::path::Path::new(&p).exists())
+            .unwrap_or(false)
+    };
+    exists("rebase-merge") || exists("rebase-apply")
+}
+
+/// Stage `n` of a conflicted path (`:2:` = ours / trunk during rebase, `:3:` = theirs).
+/// Does not trim — file bytes must stay intact for the date-only comparison.
+pub fn show_stage(stage: u8, path: &str) -> Result<String> {
+    let spec = format!(":{stage}:{path}");
+    let out = std::process::Command::new("git")
+        .args(["show", &spec])
+        .output()
+        .map_err(|e| anyhow::anyhow!("git show {spec}: {e}"))?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "git show {spec} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// During rebase, `--ours` is the branch we are rebasing onto (trunk).
+pub fn checkout_ours(path: &str) -> Result<()> {
+    inherit("git", &["checkout", "--ours", "--", path])
+}
+
+pub fn add(path: &str) -> Result<()> {
+    inherit("git", &["add", "--", path])
+}
+
+/// Paths that differ between `origin/<trunk>` and HEAD (empty when the branch has no unique diff).
+pub fn diff_names_vs(trunk: &str) -> Result<Vec<String>> {
+    let spec = format!("origin/{trunk}...HEAD");
+    let out = capture("git", &["diff", "--name-only", spec.as_str()])?;
+    Ok(out
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 /// (ahead, behind) commit counts for HEAD vs origin/trunk.
 pub fn ahead_behind(trunk: &str) -> Result<(u32, u32)> {
     let out = capture(

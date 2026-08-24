@@ -90,9 +90,15 @@ now.) **`dev` is the integration trunk** — every feature PRs into it; `main` i
   (`cli/src/cmd/flow.rs`).
 - **OPS-0001 [review]** — Go through `midas flow` for branch/rebase/PR/tag; don't hand-roll the git
   dance. `rebase` = `fetch --prune` + `rebase origin/<trunk>` + `push --force-with-lease` (with
-  confirm), and prints conflict guidance instead of leaving you stranded. `ship` rebases, pushes,
-  then runs `gh pr create --base <trunk>` with the what/why/test-plan template prefilled and the
-  title defaulting to the last commit subject; it refuses to ship from the trunk or `main`
+  confirm), and prints conflict guidance instead of leaving you stranded. `--resolve-doc-dates`
+  (opt-in) auto-resolves a `last_reviewed`-only conflict on a canon ref by keeping the **trunk**
+  document — never a synthesized max date, never a content hunk. `ship` rebases, pushes, then
+  opens or updates the PR against `[flow].trunk`. An existing PR whose base is not the trunk is
+  retargeted (`gh pr edit --base <trunk>`) after confirm (`-y` retargets). A PR already targeting
+  a `[flow].promotion_bases` entry is an explicit promotion and is left alone; `--promote` /
+  `--base <name>` is the signal to create one. `ship` warns (does not fail) when other open
+  same-trunk PRs share paths, and both `rebase` and `ship` report a zero-diff branch as
+  superseded without closing anything. Force-push never targets the trunk or a promotion base
   (`cli/src/cmd/flow.rs`; `cli/src/flow/gh.rs`). `--draft`, `--auto-merge`, `--title`, `--body`
   override.
 - **OPS-0007 [check]** — Paired PlanetScale branches are **opt-in by schema intent**, not by branch
@@ -226,9 +232,13 @@ Full conventions live in `backend/`/`frontend/`; the process rules:
 ## Pre-commit, secrets, deploy
 
 - **OPS-0011 [check]** — Husky pre-commit runs `lint-staged` → Prettier, then `midas -y --no-color
-  check` (`.husky/pre-commit`). If `midas` is not installed the hook must print a warning and
-  continue — a silent skip hides local-green-vs-CI-red. Don't bypass with `--no-verify`; fix the
-  lint or fix the hook in its own PR (`README.md`, "Things that will save you pain").
+  check --changed` (`.husky/pre-commit`). `--changed` limits content scans; pair and structure
+  checks still see the full tracked inventory, so an unchanged OpenAPI/TS pair cannot disappear.
+  CI keeps running full `midas check`. Repositories whose hooks still run the full scan can
+  switch the hook to `--changed` after upgrading to a binary that includes the inventory fix.
+  If `midas` is not installed the hook must print a warning and continue — a silent skip hides
+  local-green-vs-CI-red. Don't bypass with `--no-verify`; fix the lint or fix the hook in its
+  own PR (`README.md`, "Things that will save you pain").
 - **OPS-0012 [check]** — `.env`/`.env.*` are gitignored except `.env.example`/`.env.test`
   (`.gitignore`); `app/api/.env` holds dev-only creds, has no template, and is **not** tracked — you
   get it from a teammate or 1Password. Never force-push `main`/`dev` — revert with a new commit

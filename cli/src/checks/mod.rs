@@ -6,7 +6,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use ignore::WalkBuilder;
 use regex::Regex;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Whether a drift finding was introduced by this branch or inherited from the PR base.
@@ -55,6 +55,11 @@ pub struct Scanner {
     /// Merge-base (or `--base`) used to attribute drift. `None` means no attribution —
     /// findings stay absolute, matching a check with no resolvable PR base.
     baseline: Option<String>,
+    /// Tracked (index) paths, root-relative. `None` outside a git repo — presence on disk
+    /// is then enough for pair checks (fixture mode). Untracked files must fail in a repo.
+    tracked: Option<HashSet<String>>,
+    /// Why date-based DOC/AGT drift was not computed (today: `shallow-history`).
+    drift_skip: Option<String>,
 }
 
 impl Scanner {
@@ -87,6 +92,8 @@ impl Scanner {
             shallow: None,
             last_change: HashMap::new(),
             baseline: None,
+            tracked: git_tracked_files(root),
+            drift_skip: None,
         })
     }
 
@@ -104,11 +111,16 @@ impl Scanner {
     }
 
     /// Narrow the scan to `keep` (root-relative, forward-slashed) — `check --changed`. Only the
-    /// content scans (banned-call / banned-file) consult the file list; file-structure,
-    /// managed-block, and source-drift checks probe the whole tree (a doc is stale when its
-    /// *sources* moved, not when the doc itself is in the diff).
-    pub fn retain(&mut self, keep: &std::collections::HashSet<String>) {
+    /// content scans (banned-call / banned-file / citations) consult the file list; file-structure,
+    /// pair, managed-block, frontmatter, and source-drift checks probe the whole tree (a pair is
+    /// missing when either half is absent, and a doc is stale when its *sources* moved).
+    pub fn retain(&mut self, keep: &HashSet<String>) {
         self.files.retain(|rel| keep.contains(&rel_slash(rel)));
+    }
+
+    /// Machine-readable reason date-based drift was skipped, if any (`shallow-history`).
+    pub fn drift_skip_reason(&self) -> Option<&str> {
+        self.drift_skip.as_deref()
     }
 
     pub fn root(&self) -> &Path {
@@ -205,12 +217,24 @@ impl Scanner {
             .collect())
     }
 
-    /// Whether at least one tracked (non-gitignored) file matches `glob` — the presence half of
-    /// `artifact-hash`: a glob matching nothing means the file is either absent or gitignored, and
-    /// either way there's nothing committed for drift to be checked against.
+    /// Whether at least one **tracked** (non-gitignored, in the index) file matches `glob`.
+    /// Uses the full inventory, not the `--changed` retain — an unchanged generated pair must
+    /// still be visible. Outside a git repo, on-disk presence (WalkBuilder) is enough.
+    /// Ignored, absent, or untracked artifacts return `false`.
     pub fn any_match(&self, glob: &str) -> Result<bool> {
         let set = build_globset(std::slice::from_ref(&glob.to_string()))?;
-        Ok(self.files.iter().any(|rel| set.is_match(rel_slash(rel))))
+        Ok(self.all_files.iter().any(|rel| {
+            let s = rel_slash(rel);
+            set.is_match(&s) && self.is_tracked(&s)
+        }))
+    }
+
+    /// In a git repo a path must be in the index; outside one, on-disk is enough.
+    fn is_tracked(&self, rel: &str) -> bool {
+        match &self.tracked {
+            Some(set) => set.contains(rel),
+            None => true,
+        }
     }
 
     /// AGT-0009: canonical context docs matching `globs` (minus `exclude`) must carry `owner` +
@@ -234,7 +258,7 @@ impl Scanner {
             .map(|g| build_globset(std::slice::from_ref(&g.to_string())))
             .transpose()?;
 
-        let candidates = self.matching_files(&glob_set, &exclude_set);
+        let candidates = self.matching_all_files(&glob_set, &exclude_set);
         let mut findings = Vec::new();
         for rel in candidates {
             let rel_str = rel_slash(&rel);
@@ -317,10 +341,12 @@ impl Scanner {
         let exclude_set = build_globset(exclude)?;
         let mut findings = Vec::new();
         let mut drift_items: Vec<(String, String)> = Vec::new();
-        let candidates = if rule == "drift" {
-            self.matching_all_files(&docs_glob, &exclude_set)
-        } else {
+        // Encoding / frontmatter / drift are structural or history checks — `--changed` must
+        // not hide an unchanged doc. Citations stay on the narrowed list (content scan).
+        let candidates = if rule == "citations" {
             self.matching_files(&docs_glob, &exclude_set)
+        } else {
+            self.matching_all_files(&docs_glob, &exclude_set)
         };
 
         for rel in candidates {
@@ -504,10 +530,11 @@ impl Scanner {
             }
         }
         // A shallow clone has only the head commit, so every path would date to today and every
-        // doc reviewed earlier would "drift". Report nothing rather than something false — CI
-        // wanting this check must fetch full history (`fetch-depth: 0`). Missing `sources:` is
-        // structural and does not need history, so those findings still return.
+        // doc reviewed earlier would "drift". Skip date-based drift with an explicit reason —
+        // CI wanting this check must fetch full history (`fetch-depth: 0`). Missing `sources:`
+        // is structural and does not need history, so those findings still return.
         if self.is_shallow() {
+            self.drift_skip = Some("shallow-history".into());
             return findings;
         }
         findings.extend(self.close_source_drift(&docs, grace_days));
@@ -683,8 +710,10 @@ impl Scanner {
         shallow
     }
 
-    /// Last commit date + hash touching a pathspec, or `None` outside a git repo / for a
-    /// path with no history. Glob magic is explicit so `**` means what the frontmatter says.
+    /// Last commit UTC calendar date + hash touching a pathspec, or `None` outside a git repo /
+    /// for a path with no history. `%cI` is converted to a UTC date so a commit just either
+    /// side of UTC midnight is compared as a date, not a timestamp. Glob magic is explicit so
+    /// `**` means what the frontmatter says.
     fn last_change(&mut self, pathspec: &str) -> Option<(String, String)> {
         if let Some(cached) = self.last_change.get(pathspec) {
             return cached.clone();
@@ -693,7 +722,7 @@ impl Scanner {
             let out = std::process::Command::new("git")
                 .arg("-C")
                 .arg(&self.root)
-                .args(["log", "-1", "--format=%cs %H", "--"])
+                .args(["log", "-1", "--format=%cI %H", "--"])
                 .arg(format!(":(glob){pathspec}"))
                 .output()
                 .ok()?;
@@ -701,9 +730,9 @@ impl Scanner {
                 return None;
             }
             let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            let (date, commit) = line.split_once(' ')?;
-            (date.len() == 10 && (commit.len() == 40 || commit.len() == 64))
-                .then(|| (date.to_string(), commit.to_string()))
+            let (stamp, commit) = line.split_once(' ')?;
+            let date = crate::date::utc_calendar_date(stamp)?;
+            (commit.len() == 40 || commit.len() == 64).then_some((date, commit.to_string()))
         })();
         self.last_change.insert(pathspec.to_string(), hit.clone());
         hit
@@ -864,7 +893,7 @@ fn rel_slash(rel: &Path) -> String {
 /// Present, non-empty `key: value` pairs from a file's leading `---`-delimited frontmatter block
 /// (line 1 must be exactly `---`). Minimal single-line scan — matches how these docs are actually
 /// authored, not a full YAML parser.
-fn frontmatter_map(content: &str) -> std::collections::HashMap<String, String> {
+pub(crate) fn frontmatter_map(content: &str) -> std::collections::HashMap<String, String> {
     let mut kv = std::collections::HashMap::new();
     let mut lines = content.lines();
     if lines.next() != Some("---") {
@@ -948,4 +977,39 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
         b.add(Glob::new(p).map_err(|e| anyhow::anyhow!("invalid glob {p:?}: {e}"))?);
     }
     Ok(b.build()?)
+}
+
+/// Tracked (index) paths relative to `root`. `None` when `root` is not inside a git work
+/// tree — pair checks then treat on-disk presence as enough (fixtures, `check --root` of a
+/// non-repo). `ls-files --full-name` is toplevel-relative; remapped when `--root` is nested.
+fn git_tracked_files(root: &Path) -> Option<HashSet<String>> {
+    let toplevel = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())?;
+    let toplevel = std::fs::canonicalize(toplevel).ok()?;
+    let root_abs = std::fs::canonicalize(root).ok()?;
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "--cached", "--full-name"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let mut set = HashSet::new();
+    for p in String::from_utf8_lossy(&out.stdout).lines() {
+        if p.is_empty() {
+            continue;
+        }
+        let abs = toplevel.join(p);
+        if let Ok(rel) = abs.strip_prefix(&root_abs) {
+            set.insert(rel.to_string_lossy().replace('\\', "/"));
+        }
+    }
+    Some(set)
 }
