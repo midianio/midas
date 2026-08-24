@@ -39,7 +39,7 @@ agent-runnable contract is enforced once, centrally, not re-implemented per comm
 | Command | Key flags | stdout (`--json`) | Exit | Status |
 | --- | --- | --- | --- | --- |
 | `midas flow <verb>` | start·sync·ship·tag·end·status | per-subcommand | 0 / 1 / 2 | **shipped** |
-| `midas check` | (globals only) | `{version, root, mechanical:{…}, semantic:{delegated,…}}` | 0 / 2 / 3 | **shipped** (mechanical) |
+| `midas check` | `--changed`, `--base` | `{version, root, mechanical:{…}, semantic:{delegated,…}}` | 0 / 2 / 3 | **shipped** (mechanical) |
 | `midas sync` | `--check` | files touched + block version | 0 / 2 | **shipped** |
 | `midas doctor` | — | env diagnosis | 0 / 2 | **shipped** |
 | `midas touch state\|migration\|component\|module <name>` | `--dir`, `--ui`, `--no-wire`, `--force` | stamped file paths (+ `pub mod` wiring for `module`) | 0 / 2 / 3 | **shipped** |
@@ -81,6 +81,8 @@ semantic_strict = false    # opt-in; surfaced in --json for the external review 
 
 [flow]                     # ported-midflow config (was hardcoded in midflow); defaults reproduce it
 trunk         = "dev"      # midflow MainBranch (this repo overrides to "main")
+promotion_bases = ["main"] # optional; PRs targeting these are promotions, not wrong-base
+# overlap_drafts = true    # include draft PRs in ship overlap warnings
 pscale_org    = "midian"
 pscale_db     = "application"
 pscale_parent = "dev"

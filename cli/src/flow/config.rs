@@ -21,6 +21,11 @@ pub struct FlowConfig {
     pub port: u16,
     pub api_env_local: String,
     pub env_marker: String,
+    /// Bases that are intentional promotions (not wrong-base). A PR already targeting
+    /// one of these is left alone; `--promote` / `--base` must name one of these.
+    pub promotion_bases: Vec<String>,
+    /// Include draft PRs in overlap warnings (default true).
+    pub overlap_drafts: bool,
 }
 
 impl Default for FlowConfig {
@@ -34,6 +39,8 @@ impl Default for FlowConfig {
             port: 3309,
             api_env_local: "app/api/.env.local".into(),
             env_marker: "midas".into(),
+            promotion_bases: Vec::new(),
+            overlap_drafts: true,
         }
     }
 }
@@ -51,7 +58,18 @@ impl FlowConfig {
             port: f.tunnel_port.unwrap_or(d.port),
             api_env_local: f.api_env_local.clone().unwrap_or(d.api_env_local),
             env_marker: f.env_marker.clone().unwrap_or(d.env_marker),
+            promotion_bases: f.promotion_bases.clone(),
+            overlap_drafts: f.overlap_drafts.unwrap_or(d.overlap_drafts),
         }
+    }
+
+    /// True for the configured trunk, any promotion base, or the universal production names.
+    /// Force-push never targets these.
+    pub fn is_protected(&self, branch: &str) -> bool {
+        branch == self.trunk
+            || branch == "main"
+            || branch == "master"
+            || self.promotion_bases.iter().any(|b| b == branch)
     }
 
     /// `root@tcp(127.0.0.1:PORT)/DB?...` — the local tunnel DSN written into `.env.local`.

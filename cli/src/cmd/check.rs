@@ -42,6 +42,8 @@ struct Result1 {
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    skip_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     doc: Option<String>,
 }
 
@@ -254,6 +256,7 @@ pub struct Eval {
     pub outcome: Outcome,
     pub findings: Vec<Finding>,
     pub note: Option<String>,
+    pub skip_reason: Option<String>,
 }
 
 /// Classify a single convention against the tree, mirroring `check`'s logic: applicability →
@@ -272,6 +275,7 @@ pub fn outcome_of(
         outcome,
         findings,
         note,
+        skip_reason: None,
     };
 
     if !applicable(conv, manifest, has_manifest) {
@@ -409,6 +413,27 @@ pub fn outcome_of(
     };
 
     if findings.is_empty() {
+        // Date-based DOC/AGT drift is uncomputable in a shallow clone. Structural
+        // findings (missing `sources:`) still fail above; an empty run is skipped
+        // with a machine-readable reason rather than a false pass.
+        if let Some(reason) = scanner.drift_skip_reason() {
+            let date_based = match spec {
+                CheckSpec::SourceDrift { .. } => true,
+                CheckSpec::DocLifecycle { rule, .. } => rule == "drift",
+                _ => false,
+            };
+            if date_based {
+                return Eval {
+                    outcome: Outcome::Skipped,
+                    findings: vec![],
+                    note: Some(
+                        "date-based DOC/AGT drift skipped — shallow clone has no history (CI: fetch-depth: 0)"
+                            .into(),
+                    ),
+                    skip_reason: Some(reason.to_string()),
+                };
+            }
+        }
         return eval(Outcome::Pass, vec![], None);
     }
 
@@ -569,6 +594,7 @@ fn evaluate(
         outcome: e.outcome,
         findings: e.findings,
         note: e.note,
+        skip_reason: e.skip_reason,
         doc: conv.doc.clone(),
     }
 }

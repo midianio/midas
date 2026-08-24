@@ -14,6 +14,11 @@ use crate::core::{prompt_line, Ctx};
 use crate::flow::config::{
     pscale_branch_from_git, slugify, valid_branch_type, validate_slug, BRANCH_TYPES,
 };
+use crate::flow::docs::{date_only_conflict, is_canon_ref_path, ResolvedDocDate};
+use crate::flow::pr::{
+    classify_overlap, intended_base, retarget_decision, should_warn_overlap, Overlap,
+    RetargetDecision,
+};
 use crate::flow::{env, gh, git, pscale, release, FlowConfig};
 use crate::manifest::Manifest;
 use clap::Subcommand;
@@ -40,7 +45,12 @@ pub enum FlowCmd {
     Isolate,
     /// Rebase the current branch on origin/<trunk> and push (mid-work catch-up).
     #[command(alias = "sync")]
-    Rebase,
+    Rebase {
+        /// Auto-resolve `last_reviewed`-only conflicts in canon refs by keeping the trunk document.
+        /// Opt-in until real-repo evidence shows no false resolutions.
+        #[arg(long)]
+        resolve_doc_dates: bool,
+    },
     /// Send it: rebase on trunk, push, then open or update the PR (the daily "I'm ready" button).
     #[command(visible_alias = "pr")]
     Ship {
@@ -55,6 +65,15 @@ pub enum FlowCmd {
         /// Enable auto-merge (squash) on the PR — it merges itself once checks pass.
         #[arg(long)]
         auto_merge: bool,
+        /// Explicit PR base. Must be the trunk or a `[flow].promotion_bases` entry.
+        #[arg(long)]
+        base: Option<String>,
+        /// Target the first `[flow].promotion_bases` entry instead of trunk (explicit promotion).
+        #[arg(long)]
+        promote: bool,
+        /// Auto-resolve `last_reviewed`-only conflicts while rebasing (same as `flow rebase`).
+        #[arg(long)]
+        resolve_doc_dates: bool,
     },
     /// Cut an annotated release tag from the trunk.
     Tag {
@@ -92,13 +111,28 @@ pub fn run(ctx: &Ctx, manifest: &Manifest, cmd: FlowCmd) -> CliResult {
             no_data,
         } => start(ctx, &cfg, branch_type, slug, with_data, no_data),
         FlowCmd::Isolate => isolate(ctx, &cfg),
-        FlowCmd::Rebase => rebase(ctx, &cfg),
+        FlowCmd::Rebase { resolve_doc_dates } => rebase(ctx, &cfg, resolve_doc_dates),
         FlowCmd::Ship {
             draft,
             title,
             body,
             auto_merge,
-        } => ship(ctx, &cfg, draft, title, body, auto_merge),
+            base,
+            promote,
+            resolve_doc_dates,
+        } => ship(
+            ctx,
+            &cfg,
+            ShipOpts {
+                draft,
+                title,
+                body,
+                auto_merge,
+                base,
+                promote,
+                resolve_doc_dates,
+            },
+        ),
         FlowCmd::Tag { version, message } => tag(ctx, &cfg, version, message),
         FlowCmd::End { delete_data } => end(ctx, &cfg, delete_data),
         FlowCmd::Status => status(ctx, &cfg),
@@ -271,7 +305,7 @@ fn isolate(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
     Ok(())
 }
 
-fn rebase(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
+fn rebase(ctx: &Ctx, cfg: &FlowConfig, resolve_doc_dates: bool) -> CliResult {
     git::ensure_repo()?;
     if !git::is_clean()? {
         return Err(CliError::expected(
@@ -293,10 +327,19 @@ fn rebase(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
 
     let (ahead, behind) = git::ahead_behind(&cfg.trunk)?;
     if behind == 0 {
+        let superseded = is_superseded(&cfg.trunk, ahead);
+        report_superseded(ctx, &cfg.trunk, superseded);
         ctx.out
             .success(format!("already up to date (ahead {ahead}, behind 0)"));
         ctx.out.data(
-            &json!({ "rebased": false, "ahead": ahead, "behind": 0 }),
+            &json!({
+                "rebased": false,
+                "ahead": ahead,
+                "behind": 0,
+                "superseded": superseded,
+                "noUniqueDiff": superseded,
+                "resolvedDocDates": [],
+            }),
             |_| "up to date".into(),
         );
         return Ok(());
@@ -305,76 +348,230 @@ fn rebase(ctx: &Ctx, cfg: &FlowConfig) -> CliResult {
     ctx.out
         .info(format!("ahead {ahead}, behind {behind} — rebasing"));
     ctx.out.step(format!("git rebase origin/{}", cfg.trunk));
-    rebase_onto_trunk(cfg)?;
+    let resolved = rebase_onto_trunk(ctx, cfg, resolve_doc_dates)?;
+    explain_resolved_dates(ctx, &resolved);
+
+    let (ahead, _) = git::ahead_behind(&cfg.trunk).unwrap_or((ahead, 0));
+    let superseded = is_superseded(&cfg.trunk, ahead);
+    report_superseded(ctx, &cfg.trunk, superseded);
 
     if !git::has_upstream() {
         ctx.out.info("branch has no upstream yet — pushing");
         git::push()?;
         ctx.out.success(format!("pushed {branch}"));
-        ctx.out
-            .data(&json!({ "rebased": true, "pushed": true }), |_| {
-                "rebased and pushed".into()
-            });
+        ctx.out.data(
+            &json!({
+                "rebased": true,
+                "pushed": true,
+                "superseded": superseded,
+                "noUniqueDiff": superseded,
+                "resolvedDocDates": resolved,
+            }),
+            |_| "rebased and pushed".into(),
+        );
         return Ok(());
     }
 
+    if cfg.is_protected(&branch) {
+        return Err(CliError::expected(format!(
+            "refusing to force-push protected branch {branch:?}"
+        )));
+    }
     if ctx.confirm("Rebase clean. Push --force-with-lease?", true)? {
         ctx.out.step("git push --force-with-lease");
         git::push_force_with_lease()?;
         ctx.out.success(format!("rebased and pushed {branch}"));
-        ctx.out
-            .data(&json!({ "rebased": true, "pushed": true }), |_| {
-                "rebased and pushed".into()
-            });
+        ctx.out.data(
+            &json!({
+                "rebased": true,
+                "pushed": true,
+                "superseded": superseded,
+                "noUniqueDiff": superseded,
+                "resolvedDocDates": resolved,
+            }),
+            |_| "rebased and pushed".into(),
+        );
     } else {
         ctx.out
             .info("skipped push — local and origin will diverge until you push");
-        ctx.out
-            .data(&json!({ "rebased": true, "pushed": false }), |_| {
-                "rebased".into()
-            });
+        ctx.out.data(
+            &json!({
+                "rebased": true,
+                "pushed": false,
+                "superseded": superseded,
+                "noUniqueDiff": superseded,
+                "resolvedDocDates": resolved,
+            }),
+            |_| "rebased".into(),
+        );
     }
     Ok(())
 }
 
 /// Run `git rebase origin/<trunk>` and turn a conflict into a friendly, recoverable error listing
-/// the conflicted files. Shared by `rebase` and `ship`.
-fn rebase_onto_trunk(cfg: &FlowConfig) -> CliResult {
-    if git::rebase_onto(&cfg.trunk).is_err() {
+/// the conflicted files. With `--resolve-doc-dates`, a `last_reviewed`-only conflict on a canon
+/// ref keeps the trunk document. Shared by `rebase` and `ship`.
+fn rebase_onto_trunk(
+    ctx: &Ctx,
+    cfg: &FlowConfig,
+    resolve_doc_dates: bool,
+) -> Result<Vec<ResolvedDocDate>, CliError> {
+    let mut resolved = Vec::new();
+    if git::rebase_onto(&cfg.trunk).is_ok() {
+        return Ok(resolved);
+    }
+    finish_rebase_conflicts(ctx, resolve_doc_dates, &mut resolved)?;
+    Ok(resolved)
+}
+
+fn finish_rebase_conflicts(
+    ctx: &Ctx,
+    resolve_doc_dates: bool,
+    resolved: &mut Vec<ResolvedDocDate>,
+) -> CliResult {
+    let mut continue_attempts = 0u8;
+    loop {
         let conflicts = git::conflicted_files();
-        let mut msg = String::from("rebase produced conflicts");
-        if !conflicts.is_empty() {
-            msg.push_str(":\n");
-            for c in &conflicts {
-                msg.push_str(&format!("    - {c}\n"));
+        if conflicts.is_empty() {
+            if git::rebase_in_progress() {
+                continue_attempts = continue_attempts.saturating_add(1);
+                if continue_attempts > 8 {
+                    return Err(CliError::expected(
+                        "rebase still in progress after resolving conflicts — `git rebase --continue` or `--abort`",
+                    ));
+                }
+                if git::rebase_continue().is_err() {
+                    continue;
+                }
+            }
+            return Ok(());
+        }
+        continue_attempts = 0;
+        if resolve_doc_dates {
+            let newly = resolve_doc_date_conflicts(&conflicts)?;
+            if !newly.is_empty() {
+                for r in &newly {
+                    ctx.out.info(format!(
+                        "resolved last_reviewed-only conflict in {} (kept trunk)",
+                        r.path
+                    ));
+                }
+                resolved.extend(newly);
+                let left = git::conflicted_files();
+                if left.is_empty() {
+                    match git::rebase_continue() {
+                        Ok(()) => return Ok(()),
+                        Err(_) => continue,
+                    }
+                }
+                return rebase_conflict_err(&left);
             }
         }
-        msg.push_str(
-            "\nresolve them, then `git add` + `git rebase --continue`, or `git rebase --abort`.",
-        );
-        return Err(CliError::expected(msg));
+        return rebase_conflict_err(&conflicts);
     }
-    Ok(())
+}
+
+fn resolve_doc_date_conflicts(conflicts: &[String]) -> Result<Vec<ResolvedDocDate>, CliError> {
+    let mut out = Vec::new();
+    for path in conflicts {
+        if !is_canon_ref_path(path) {
+            continue;
+        }
+        let ours = match git::show_stage(2, path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let theirs = match git::show_stage(3, path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        if !date_only_conflict(&ours, &theirs) {
+            continue;
+        }
+        git::checkout_ours(path).map_err(CliError::tool)?;
+        git::add(path).map_err(CliError::tool)?;
+        out.push(ResolvedDocDate {
+            path: path.clone(),
+            kept: "trunk",
+        });
+    }
+    Ok(out)
+}
+
+fn rebase_conflict_err(conflicts: &[String]) -> CliResult {
+    let mut msg = String::from("rebase produced conflicts");
+    if !conflicts.is_empty() {
+        msg.push_str(":\n");
+        for c in conflicts {
+            msg.push_str(&format!("    - {c}\n"));
+        }
+    }
+    msg.push_str(
+        "\nresolve them, then `git add` + `git rebase --continue`, or `git rebase --abort`.",
+    );
+    Err(CliError::expected(msg))
+}
+
+fn is_superseded(trunk: &str, ahead: u32) -> bool {
+    if ahead == 0 {
+        return true;
+    }
+    git::diff_names_vs(trunk)
+        .map(|paths| paths.is_empty())
+        .unwrap_or(false)
+}
+
+fn report_superseded(ctx: &Ctx, trunk: &str, superseded: bool) {
+    if superseded {
+        ctx.out.warn(format!(
+            "Branch has no unique changes after rebasing on `{trunk}`; consider closing the existing PR as superseded."
+        ));
+    }
+}
+
+fn explain_resolved_dates(ctx: &Ctx, resolved: &[ResolvedDocDate]) {
+    if resolved.is_empty() {
+        return;
+    }
+    ctx.out.info(format!(
+        "auto-resolved {} last_reviewed-only conflict(s) (kept trunk)",
+        resolved.len()
+    ));
 }
 
 /// The opinionated daily "send it" button: rebase the feature branch on trunk, push it, then open a
 /// PR (or no-op if one is already open — the push has already updated it). Folds what used to be a
 /// separate `rebase` + `pr` into one step; `rebase` remains for a rebase-only catch-up. With
 /// `--auto-merge` the PR is armed to squash-merge itself once its checks pass.
-fn ship(
-    ctx: &Ctx,
-    cfg: &FlowConfig,
+struct ShipOpts {
     draft: bool,
     title: Option<String>,
     body: Option<String>,
     auto_merge: bool,
-) -> CliResult {
+    base: Option<String>,
+    promote: bool,
+    resolve_doc_dates: bool,
+}
+
+fn ship(ctx: &Ctx, cfg: &FlowConfig, opts: ShipOpts) -> CliResult {
+    let ShipOpts {
+        draft,
+        title,
+        body,
+        auto_merge,
+        base,
+        promote,
+        resolve_doc_dates,
+    } = opts;
     git::ensure_repo()?;
     gh::ensure_installed()?;
     gh::ensure_authed()?;
 
+    let intended = intended_base(&cfg.trunk, &cfg.promotion_bases, base.as_deref(), promote)
+        .map_err(CliError::usage)?;
+
     let branch = git::current_branch()?;
-    if branch == cfg.trunk || branch == "main" {
+    if branch == cfg.trunk || cfg.is_protected(&branch) {
         return Err(CliError::usage(format!(
             "on {branch} — switch to a feature branch first (try `midas flow start`)"
         )));
@@ -391,19 +588,28 @@ fn ship(
     ctx.out.step("git fetch origin --prune");
     git::fetch()?;
     let (ahead, behind) = git::ahead_behind(&cfg.trunk)?;
+    let mut resolved = Vec::new();
     if behind > 0 {
         ctx.out.info(format!(
             "behind {behind} — rebasing on origin/{}",
             cfg.trunk
         ));
         ctx.out.step(format!("git rebase origin/{}", cfg.trunk));
-        rebase_onto_trunk(cfg)?;
+        resolved = rebase_onto_trunk(ctx, cfg, resolve_doc_dates)?;
+        explain_resolved_dates(ctx, &resolved);
     } else {
         ctx.out.info(format!(
             "up to date with origin/{} (ahead {ahead})",
             cfg.trunk
         ));
     }
+
+    let (ahead, _) = git::ahead_behind(&cfg.trunk).unwrap_or((ahead, 0));
+    let superseded = is_superseded(&cfg.trunk, ahead);
+    report_superseded(ctx, &cfg.trunk, superseded);
+
+    let our_files = git::diff_names_vs(&cfg.trunk).unwrap_or_default();
+    let overlap = warn_open_pr_overlap(ctx, cfg, &branch, &our_files);
 
     // 2. Push (force-with-lease after a possible rebase; plain push to set upstream the first time).
     if git::has_upstream() {
@@ -414,17 +620,39 @@ fn ship(
         git::push()?;
     }
 
-    // 3. Open the PR, or no-op if one is already open.
-    if let Some(url) = gh::existing_pr(&branch) {
-        ctx.out.success(format!("PR updated: {url}"));
-        if auto_merge {
-            arm_auto_merge(ctx, &branch)?;
+    // 3. Open the PR, or update / retarget an existing one.
+    match gh::existing_pr_info(&branch) {
+        Ok(Some(pr)) => {
+            let (retargeted, final_base) =
+                apply_retarget(ctx, &pr, &intended, &cfg.promotion_bases)?;
+            if auto_merge {
+                arm_auto_merge(ctx, &branch)?;
+            }
+            ctx.out.success(format!("PR updated: {}", pr.url));
+            ctx.out.data(
+                &json!({
+                    "url": pr.url,
+                    "created": false,
+                    "autoMerge": auto_merge,
+                    "discoveredBase": pr.base,
+                    "intendedBase": intended,
+                    "finalBase": final_base,
+                    "retargeted": retargeted,
+                    "superseded": superseded,
+                    "noUniqueDiff": superseded,
+                    "resolvedDocDates": resolved,
+                    "overlap": overlap,
+                }),
+                |_| pr.url.clone(),
+            );
+            return Ok(());
         }
-        ctx.out.data(
-            &json!({ "url": url, "created": false, "autoMerge": auto_merge }),
-            |_| url.clone(),
-        );
-        return Ok(());
+        Ok(None) => {}
+        Err(e) => {
+            return Err(CliError::expected(format!(
+                "could not inspect the existing PR: {e}"
+            )));
+        }
     }
 
     let default_title = git::last_commit_subject().unwrap_or_default();
@@ -438,20 +666,136 @@ fn ship(
     let body = body.unwrap_or(default_body);
 
     ctx.out.step(format!(
-        "gh pr create --base {}{}",
-        cfg.trunk,
+        "gh pr create --base {intended}{}",
         if draft { " --draft" } else { "" }
     ));
-    let url = gh::create_pr(&title, &body, &cfg.trunk, draft)?;
+    let url = gh::create_pr(&title, &body, &intended, draft)
+        .map_err(|e| CliError::expected(format!("gh pr create failed: {e}")))?;
     ctx.out.success(format!("PR opened: {url}"));
     if auto_merge {
         arm_auto_merge(ctx, &branch)?;
     }
     ctx.out.data(
-        &json!({ "url": url, "created": true, "draft": draft, "autoMerge": auto_merge }),
+        &json!({
+            "url": url,
+            "created": true,
+            "draft": draft,
+            "autoMerge": auto_merge,
+            "discoveredBase": serde_json::Value::Null,
+            "intendedBase": intended,
+            "finalBase": intended,
+            "retargeted": false,
+            "superseded": superseded,
+            "noUniqueDiff": superseded,
+            "resolvedDocDates": resolved,
+            "overlap": overlap,
+        }),
         |_| url.clone(),
     );
     Ok(())
+}
+
+fn apply_retarget(
+    ctx: &Ctx,
+    pr: &crate::flow::pr::PrInfo,
+    intended: &str,
+    promotion_bases: &[String],
+) -> Result<(bool, String), CliError> {
+    match retarget_decision(&pr.base, intended, promotion_bases) {
+        RetargetDecision::Same => Ok((false, pr.base.clone())),
+        RetargetDecision::Promotion { current } => {
+            ctx.out.info(format!(
+                "PR #{} targets {current} (promotion) — leaving the base alone",
+                pr.number
+            ));
+            Ok((false, current))
+        }
+        RetargetDecision::Retarget { from, to } => {
+            ctx.out.info(format!(
+                "PR #{} is based on {from}; configured trunk/base is {to}",
+                pr.number
+            ));
+            if !ctx.confirm(
+                &format!("Retarget PR #{} from {from} to {to}?", pr.number),
+                true,
+            )? {
+                return Ok((false, from));
+            }
+            ctx.out
+                .step(format!("gh pr edit {} --base {to}", pr.number));
+            gh::set_pr_base(pr.number, &to).map_err(|e| {
+                CliError::expected(format!("could not retarget PR #{} to {to}: {e}", pr.number))
+            })?;
+            ctx.out
+                .success(format!("retargeted PR #{} to {to}", pr.number));
+            Ok((true, to))
+        }
+    }
+}
+
+/// Advisory overlap with other open PRs targeting the same trunk. Network failure is a
+/// warning, never a failed local rebase/ship.
+fn warn_open_pr_overlap(
+    ctx: &Ctx,
+    cfg: &FlowConfig,
+    branch: &str,
+    ours: &[String],
+) -> Vec<Overlap> {
+    if ours.is_empty() {
+        return Vec::new();
+    }
+    let prs = match gh::open_prs_for_base(&cfg.trunk) {
+        Ok(p) => p,
+        Err(e) => {
+            ctx.out.warn(format!(
+                "could not list open PRs for overlap ({e}) — continuing offline"
+            ));
+            return Vec::new();
+        }
+    };
+    let mut out = Vec::new();
+    for pr in prs {
+        if pr.head == branch {
+            continue;
+        }
+        if pr.draft && !cfg.overlap_drafts {
+            continue;
+        }
+        if pr.base != cfg.trunk {
+            continue;
+        }
+        let theirs = match gh::pr_changed_files(pr.number) {
+            Ok(f) => f,
+            Err(e) => {
+                ctx.out.warn(format!(
+                    "could not read files for PR #{} ({e}) — skipping",
+                    pr.number
+                ));
+                continue;
+            }
+        };
+        let (exact, nearby) = classify_overlap(ours, &theirs);
+        if !should_warn_overlap(&exact, &nearby) {
+            continue;
+        }
+        ctx.out.warn(format!(
+            "open PR #{} ({}) overlaps this branch — rebase or land serially; a path match is not a semantic conflict",
+            pr.number, pr.url
+        ));
+        if !exact.is_empty() {
+            ctx.out.hint(format!("exact: {}", exact.join(", ")));
+        }
+        if !nearby.is_empty() {
+            ctx.out.hint(format!("nearby: {}", nearby.join(", ")));
+        }
+        out.push(Overlap {
+            number: pr.number,
+            url: pr.url,
+            exact,
+            nearby,
+        });
+    }
+    out
 }
 
 /// `gh pr merge --auto --squash` on the branch's PR — it merges itself once checks pass.

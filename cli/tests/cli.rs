@@ -2187,7 +2187,8 @@ fn git_stamp_days_ago(n: i64) -> String {
 fn drift_is_skipped_on_a_shallow_clone() {
     // CI checkouts default to depth 1. With only the head commit, `git log -1 -- <path>` dates
     // every path to today, so every doc reviewed before today would "drift" — a check that fails
-    // for a reason unrelated to the change. Report nothing rather than something false.
+    // for a reason unrelated to the change. Skip with a machine-readable reason rather than a
+    // false pass or invented dates.
     let dir = tempfile::tempdir().unwrap();
     clean_fixture(dir.path());
     let manifest = fs::read_to_string(dir.path().join("midas.toml")).unwrap_or_default();
@@ -2217,35 +2218,41 @@ fn drift_is_skipped_on_a_shallow_clone() {
     git(&["add", "-A"]);
     git(&["commit", "-qm", "seed"]);
 
-    let outcome = |dir: &std::path::Path| -> String {
+    let outcome = |dir: &std::path::Path| -> (String, Option<String>) {
         let out = midas()
             .args(["--json", "check", "--root"])
             .arg(dir)
             .output()
             .unwrap();
         let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-        v["mechanical"]["results"]
+        let r = v["mechanical"]["results"]
             .as_array()
             .unwrap()
             .iter()
             .find(|r| r["id"] == "DOC-0004")
-            .unwrap()["outcome"]
-            .as_str()
-            .unwrap()
-            .to_string()
+            .unwrap();
+        (
+            r["outcome"].as_str().unwrap().to_string(),
+            r["skip_reason"].as_str().map(str::to_string),
+        )
     };
     assert_eq!(
-        outcome(dir.path()),
+        outcome(dir.path()).0,
         "fail",
         "with full history, a 1999 review date against today's code is drift"
     );
 
     // `.git/shallow` is what makes `rev-parse --is-shallow-repository` report true.
     fs::write(dir.path().join(".git/shallow"), "").unwrap();
+    let (outcome, reason) = outcome(dir.path());
     assert_eq!(
-        outcome(dir.path()),
-        "pass",
-        "with truncated history the check must stay silent, not invent dates"
+        outcome, "skipped",
+        "with truncated history the check must skip, not invent dates or pass"
+    );
+    assert_eq!(
+        reason.as_deref(),
+        Some("shallow-history"),
+        "skip_reason is machine-readable"
     );
 }
 
@@ -2310,6 +2317,14 @@ fn check_json(dir: &Path, extra: &[&str]) -> (i32, serde_json::Value) {
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or(serde_json::json!({}));
     (out.status.code().unwrap_or(1), v)
+}
+
+fn json_from_stdout(stdout: &[u8]) -> serde_json::Value {
+    let s = String::from_utf8_lossy(stdout);
+    let start = s
+        .find('{')
+        .unwrap_or_else(|| panic!("no JSON object in:\n{s}"));
+    serde_json::from_str(s[start..].trim()).unwrap_or_else(|e| panic!("{e}:\n{s}"))
 }
 
 fn result_named<'a>(v: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
@@ -2663,4 +2678,344 @@ fn check_failure_line_follows_the_report_when_piped() {
         footer > summary,
         "footer must follow the summary so it cannot attach to the wrong convention:\n{text}"
     );
+}
+
+fn artifact_outcomes(v: &serde_json::Value) -> Vec<(String, String)> {
+    v["mechanical"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| matches!(r["id"].as_str(), Some("BE-0014" | "FE-0006" | "OPS-0003")))
+        .map(|r| {
+            (
+                r["id"].as_str().unwrap().to_string(),
+                r["outcome"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn check_changed_sees_unchanged_generated_pair() {
+    // The 0.8.2 defect: `--changed` withheld the tracked inventory from artifact-hash,
+    // so committed openapi.json + api.generated.ts were reported missing.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    init_git(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(dir.path(), &["commit", "-qm", "seed"], None);
+    write(dir.path(), "NOTES.md", "unrelated\n");
+
+    let (code, v) = check_json(dir.path(), &["--changed"]);
+    assert_eq!(code, 0, "unchanged tracked pair must pass --changed: {v}");
+    for (id, outcome) in artifact_outcomes(&v) {
+        assert_eq!(
+            outcome, "pass",
+            "{id} must pass when both artifacts are tracked"
+        );
+    }
+}
+
+#[test]
+fn check_changed_fails_when_pair_member_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    init_git(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(dir.path(), &["commit", "-qm", "seed"], None);
+    fs::remove_file(dir.path().join("app/api/openapi.json")).unwrap();
+    write(dir.path(), "NOTES.md", "unrelated\n");
+
+    let (code, v) = check_json(dir.path(), &["--changed"]);
+    assert_eq!(code, 2);
+    let ops = result_named(&v, "OPS-0003");
+    assert_eq!(ops["outcome"], "fail");
+    assert!(
+        ops["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["file"].as_str().unwrap().contains("openapi.json")),
+        "missing member is named: {}",
+        ops["findings"]
+    );
+}
+
+#[test]
+fn check_changed_fails_when_pair_member_is_untracked() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    init_git(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(dir.path(), &["commit", "-qm", "seed"], None);
+    git(
+        dir.path(),
+        &["rm", "--cached", "app/api/openapi.json"],
+        None,
+    );
+    write(dir.path(), "NOTES.md", "unrelated\n");
+
+    let (code, v) = check_json(dir.path(), &["--changed"]);
+    assert_eq!(code, 2, "untracked artifact must fail: {v}");
+    let ops = result_named(&v, "OPS-0003");
+    assert_eq!(ops["outcome"], "fail");
+}
+
+#[test]
+fn check_doc_drift_same_utc_date_does_not_fail() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    opt_in_docs(dir.path());
+    canon_ref(dir.path(), "thing", "app/api/src/**", "2026-08-24");
+    init_git(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "seed"],
+        Some("2026-08-20T12:00:00 +0000"),
+    );
+    write(
+        dir.path(),
+        "app/api/src/main.rs",
+        "fn main() { /* same utc day */ }\n",
+    );
+    git(dir.path(), &["add", "app/api/src/main.rs"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "same-day source"],
+        Some("2026-08-24T22:00:00 +0000"),
+    );
+
+    let (code, v) = check_json(dir.path(), &[]);
+    let r = result_named(&v, "DOC-0004");
+    assert_eq!(r["outcome"], "pass", "same UTC date must not drift: {r}");
+    assert_eq!(code, 0);
+}
+
+#[test]
+fn check_doc_drift_west_of_utc_midnight_is_the_next_utc_day() {
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    opt_in_docs(dir.path());
+    canon_ref(dir.path(), "thing", "app/api/src/**", "2026-08-24");
+    init_git(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "seed"],
+        Some("2026-08-20T12:00:00 +0000"),
+    );
+    write(
+        dir.path(),
+        "app/api/src/main.rs",
+        "fn main() { /* next utc day */ }\n",
+    );
+    git(dir.path(), &["add", "app/api/src/main.rs"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "evening PDT"],
+        Some("2026-08-24T23:00:00 -0700"),
+    );
+
+    let (code, v) = check_json(dir.path(), &[]);
+    let r = result_named(&v, "DOC-0004");
+    assert_eq!(
+        r["outcome"], "fail",
+        "23:00-07 on Aug 24 is Aug 25 UTC: {r}"
+    );
+    assert_eq!(code, 2);
+}
+
+#[test]
+fn check_json_schema_pins_finding_origin_and_skip_reason() {
+    // Additive fields: do not rename existing keys. origin/skip_reason may be absent.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    let (code, v) = check_json(dir.path(), &[]);
+    assert_eq!(code, 0);
+    assert!(v["version"].is_string());
+    assert!(v["mechanical"]["results"].is_array());
+    assert!(v["mechanical"]["inherited"].is_number());
+    assert!(v["mechanical"]["skipped"].is_number());
+    let first = &v["mechanical"]["results"][0];
+    assert!(first["id"].is_string());
+    assert!(first["outcome"].is_string());
+    assert!(first.get("findings").is_none() || first["findings"].is_array());
+}
+
+#[test]
+fn flow_help_lists_new_workflow_flags() {
+    midas()
+        .args(["flow", "rebase", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("resolve-doc-dates"));
+    midas()
+        .args(["flow", "ship", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("promote"))
+        .stdout(predicate::str::contains("base"))
+        .stdout(predicate::str::contains("resolve-doc-dates"));
+}
+
+/// Bare `origin` so `flow rebase` can fetch/push without GitHub.
+fn flow_repo(root: &Path) -> tempfile::TempDir {
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare"], None);
+    init_git(root);
+    git(root, &["branch", "-M", "main"], None);
+    git(
+        root,
+        &["remote", "add", "origin", origin.path().to_str().unwrap()],
+        None,
+    );
+    origin
+}
+
+fn write_flow_manifest(root: &Path) {
+    let ver = env!("CARGO_PKG_VERSION");
+    write(
+        root,
+        "midas.toml",
+        &format!(
+            "[standard]\nversion = \"{ver}\"\nprofile = \"cli\"\n[docs]\nscopes = [\"api\"]\n[flow]\ntrunk = \"main\"\n"
+        ),
+    );
+}
+
+fn canon_body(reviewed: &str, extra: &str) -> String {
+    format!(
+        "---\nkind: ref\nscope: api\nstatus: current\nowner: x\nlast_reviewed: {reviewed}\ncanon: true\nsources:\n  - README.md\n---\n\n# thing\n{extra}"
+    )
+}
+
+#[test]
+fn flow_rebase_resolves_last_reviewed_only_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    write_flow_manifest(dir.path());
+    write(dir.path(), "README.md", "hello\n");
+    write(
+        dir.path(),
+        "docs/ref.api.thing.md",
+        &canon_body("2026-01-01", ""),
+    );
+    let _origin = flow_repo(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(dir.path(), &["commit", "-qm", "seed"], None);
+    git(dir.path(), &["push", "-u", "origin", "main"], None);
+
+    git(dir.path(), &["checkout", "-q", "-b", "feat/dates"], None);
+    write(
+        dir.path(),
+        "docs/ref.api.thing.md",
+        &canon_body("2026-08-20", ""),
+    );
+    git(dir.path(), &["add", "docs/ref.api.thing.md"], None);
+    git(dir.path(), &["commit", "-qm", "branch date"], None);
+
+    git(dir.path(), &["checkout", "-q", "main"], None);
+    write(
+        dir.path(),
+        "docs/ref.api.thing.md",
+        &canon_body("2026-08-01", ""),
+    );
+    git(dir.path(), &["add", "docs/ref.api.thing.md"], None);
+    git(dir.path(), &["commit", "-qm", "trunk date"], None);
+    git(dir.path(), &["push", "origin", "main"], None);
+
+    git(dir.path(), &["checkout", "-q", "feat/dates"], None);
+    let out = midas()
+        .args(["-y", "--json", "flow", "rebase", "--resolve-doc-dates"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "date-only rebase should succeed: {}\n{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    // `git rebase` inherits stdout; the JSON payload is the last object.
+    let v = json_from_stdout(&out.stdout);
+    assert_eq!(v["rebased"], true);
+    let resolved = v["resolvedDocDates"].as_array().unwrap();
+    assert_eq!(resolved.len(), 1, "{v}");
+    assert_eq!(resolved[0]["path"], "docs/ref.api.thing.md");
+    assert_eq!(resolved[0]["kept"], "trunk");
+    let kept = fs::read_to_string(dir.path().join("docs/ref.api.thing.md")).unwrap();
+    assert!(
+        kept.contains("last_reviewed: 2026-08-01"),
+        "trunk document wins: {kept}"
+    );
+}
+
+#[test]
+fn flow_rebase_leaves_substantive_conflict_unresolved() {
+    let dir = tempfile::tempdir().unwrap();
+    write_flow_manifest(dir.path());
+    write(dir.path(), "README.md", "hello\n");
+    write(
+        dir.path(),
+        "docs/ref.api.thing.md",
+        &canon_body("2026-01-01", "original\n"),
+    );
+    let _origin = flow_repo(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(dir.path(), &["commit", "-qm", "seed"], None);
+    git(dir.path(), &["push", "-u", "origin", "main"], None);
+
+    git(dir.path(), &["checkout", "-q", "-b", "feat/body"], None);
+    write(
+        dir.path(),
+        "docs/ref.api.thing.md",
+        &canon_body("2026-08-20", "branch paragraph\n"),
+    );
+    git(dir.path(), &["add", "docs/ref.api.thing.md"], None);
+    git(dir.path(), &["commit", "-qm", "branch body"], None);
+
+    git(dir.path(), &["checkout", "-q", "main"], None);
+    write(
+        dir.path(),
+        "docs/ref.api.thing.md",
+        &canon_body("2026-08-01", "trunk paragraph\n"),
+    );
+    git(dir.path(), &["add", "docs/ref.api.thing.md"], None);
+    git(dir.path(), &["commit", "-qm", "trunk body"], None);
+    git(dir.path(), &["push", "origin", "main"], None);
+
+    git(dir.path(), &["checkout", "-q", "feat/body"], None);
+    midas()
+        .args(["-y", "flow", "rebase", "--resolve-doc-dates"])
+        .current_dir(dir.path())
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("rebase produced conflicts"));
+}
+
+#[test]
+fn flow_rebase_reports_superseded_when_branch_has_no_unique_diff() {
+    let dir = tempfile::tempdir().unwrap();
+    write_flow_manifest(dir.path());
+    write(dir.path(), "README.md", "hello\n");
+    let _origin = flow_repo(dir.path());
+    git(dir.path(), &["add", "-A"], None);
+    git(dir.path(), &["commit", "-qm", "seed"], None);
+    git(dir.path(), &["push", "-u", "origin", "main"], None);
+    git(dir.path(), &["checkout", "-q", "-b", "feat/empty"], None);
+
+    let out = midas()
+        .args(["-y", "--json", "flow", "rebase"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["superseded"], true);
+    assert_eq!(v["noUniqueDiff"], true);
+    assert_eq!(v["rebased"], false);
 }
