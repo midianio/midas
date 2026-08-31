@@ -2664,6 +2664,32 @@ fn artifact_outcomes(v: &serde_json::Value) -> Vec<(String, String)> {
 }
 
 #[test]
+fn check_parent_star_gitignore_does_not_hide_generated_pair() {
+    // Cursor worktrees live under ~/.cursor/worktrees/<repo>/<id>. Cursor's
+    // managed ~/.cursor/.gitignore starts with `*`. The ignore crate used to
+    // walk that parent file and treat the whole worktree as missing, so
+    // BE-0014 / FE-0006 / OPS-0003 all failed with the same "missing or
+    // gitignored" text on a pair that git itself tracks.
+    let outer = tempfile::tempdir().unwrap();
+    write(outer.path(), ".gitignore", "*\n");
+    let repo = outer.path().join("worktrees").join("proj");
+    fs::create_dir_all(&repo).unwrap();
+    clean_fixture(&repo);
+    init_git(&repo);
+    git(&repo, &["add", "-A"], None);
+    git(&repo, &["commit", "-qm", "seed"], None);
+
+    let (code, v) = check_json(&repo, &[]);
+    assert_eq!(code, 0, "parent '*' must not hide committed pair: {v}");
+    for (id, outcome) in artifact_outcomes(&v) {
+        assert_eq!(
+            outcome, "pass",
+            "{id} must pass when both artifacts are tracked: {v}"
+        );
+    }
+}
+
+#[test]
 fn check_changed_sees_unchanged_generated_pair() {
     // The 0.8.2 defect: `--changed` withheld the tracked inventory from artifact-hash,
     // so committed openapi.json + api.generated.ts were reported missing.

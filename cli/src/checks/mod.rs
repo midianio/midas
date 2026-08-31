@@ -65,15 +65,9 @@ pub struct Scanner {
 impl Scanner {
     pub fn new(root: &Path) -> Result<Self> {
         let mut files = Vec::new();
-        // Hidden files are walked (banned-file checks target dotfiles like `.env.local`), but
-        // `.gitignore` rules still apply — even outside a git repo, so fixtures behave like repos.
-        for entry in WalkBuilder::new(root)
-            .hidden(false)
-            .git_ignore(true)
-            .require_git(false)
-            .filter_entry(|e| e.file_name() != ".git")
-            .build()
-        {
+        // Hidden files are walked (banned-file checks target dotfiles like `.env.local`).
+        // Ignore rules match git: stop at the work-tree root. See `git_aligned_walk`.
+        for entry in git_aligned_walk(root).build() {
             let entry = match entry {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -979,11 +973,42 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     Ok(b.build()?)
 }
 
-/// Tracked (index) paths relative to `root`. `None` when `root` is not inside a git work
-/// tree — pair checks then treat on-disk presence as enough (fixtures, `check --root` of a
-/// non-repo). `ls-files --full-name` is toplevel-relative; remapped when `--root` is nested.
-fn git_tracked_files(root: &Path) -> Option<HashSet<String>> {
-    let toplevel = std::process::Command::new("git")
+/// Walk `root` the way git would: honor `.gitignore` from the work-tree root down, never
+/// from directories *above* the repo.
+///
+/// The `ignore` crate's default (`parents(true)` + `require_git(false)`) is not git. Git
+/// stops at the toplevel; that combination keeps walking and applies every parent
+/// `.gitignore` up to `/`. Cursor worktrees live under `~/.cursor/worktrees/…`, and
+/// Cursor's managed `~/.cursor/.gitignore` starts with `*` — so the scan treats the
+/// entire tree as ignored and artifact-hash reports a committed pair as missing.
+///
+/// `require_git(false)` is still required *outside* a work tree so fixture dirs without
+/// a `.git` honor their own `.gitignore`. Parent walking is off in that case so the
+/// directory a fixture happens to sit in cannot poison it.
+fn git_aligned_walk(root: &Path) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(root);
+    builder
+        .hidden(false)
+        .git_ignore(true)
+        .filter_entry(|e| e.file_name() != ".git");
+    match git_toplevel(root) {
+        Some(top) => {
+            // At the work-tree root, skip parent ignore files entirely (`.gitignore` *and*
+            // ripgrep `.ignore`). Nested `--root` still walks parents, but `require_git`
+            // stops `.gitignore` at the `.git` barrier — including a worktree's `.git` file.
+            let nested = std::fs::canonicalize(root).is_ok_and(|abs| abs != top);
+            builder.require_git(true).parents(nested);
+        }
+        None => {
+            builder.require_git(false).parents(false);
+        }
+    }
+    builder
+}
+
+/// Canonical work-tree root, or `None` when `root` is not inside a git work tree.
+fn git_toplevel(root: &Path) -> Option<PathBuf> {
+    let raw = std::process::Command::new("git")
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--show-toplevel"])
@@ -992,7 +1017,14 @@ fn git_tracked_files(root: &Path) -> Option<HashSet<String>> {
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty())?;
-    let toplevel = std::fs::canonicalize(toplevel).ok()?;
+    std::fs::canonicalize(raw).ok()
+}
+
+/// Tracked (index) paths relative to `root`. `None` when `root` is not inside a git work
+/// tree — pair checks then treat on-disk presence as enough (fixtures, `check --root` of a
+/// non-repo). `ls-files --full-name` is toplevel-relative; remapped when `--root` is nested.
+fn git_tracked_files(root: &Path) -> Option<HashSet<String>> {
+    let toplevel = git_toplevel(root)?;
     let root_abs = std::fs::canonicalize(root).ok()?;
     let out = std::process::Command::new("git")
         .arg("-C")
@@ -1012,4 +1044,102 @@ fn git_tracked_files(root: &Path) -> Option<HashSet<String>> {
         }
     }
     Some(set)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn write(root: &Path, rel: &str, body: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn init_git(dir: &Path) {
+        git(dir, &["init", "-q"]);
+        git(dir, &["config", "user.email", "t@example.com"]);
+        git(dir, &["config", "user.name", "t"]);
+    }
+
+    #[test]
+    fn parent_star_ignore_above_git_root_does_not_hide_files() {
+        // Cursor worktrees sit under ~/.cursor/worktrees/<repo>/<id>; Cursor's
+        // managed ~/.cursor/.gitignore starts with `*`.
+        let outer = tempfile::tempdir().unwrap();
+        write(outer.path(), ".gitignore", "*\n");
+        let repo = outer.path().join("worktrees").join("proj");
+        write(&repo, "app/api/openapi.json", "{}\n");
+        write(
+            &repo,
+            "app/web/src/lib/types/api.generated.ts",
+            "export {}\n",
+        );
+        init_git(&repo);
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "seed"]);
+
+        let scanner = Scanner::new(&repo).unwrap();
+        assert!(
+            scanner.any_match("app/api/openapi.json").unwrap(),
+            "tracked file must stay visible under a parent '*' gitignore"
+        );
+        assert!(scanner
+            .any_match("app/web/src/lib/types/api.generated.ts")
+            .unwrap());
+    }
+
+    #[test]
+    fn fixture_gitignore_still_hides_without_a_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), ".gitignore", "hidden.txt\n");
+        write(dir.path(), "hidden.txt", "x\n");
+        write(dir.path(), "visible.txt", "y\n");
+        let scanner = Scanner::new(dir.path()).unwrap();
+        assert!(!scanner.any_match("hidden.txt").unwrap());
+        assert!(scanner.any_match("visible.txt").unwrap());
+    }
+
+    #[test]
+    fn repo_gitignore_still_hides_inside_git() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), ".gitignore", "secret.txt\n");
+        write(dir.path(), "secret.txt", "x\n");
+        write(dir.path(), "visible.txt", "y\n");
+        init_git(dir.path());
+        git(dir.path(), &["add", "visible.txt", ".gitignore"]);
+        git(dir.path(), &["commit", "-qm", "seed"]);
+        let scanner = Scanner::new(dir.path()).unwrap();
+        assert!(!scanner.any_match("secret.txt").unwrap());
+        assert!(scanner.any_match("visible.txt").unwrap());
+    }
+
+    #[test]
+    fn nested_root_still_honors_repo_gitignore() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), ".gitignore", "app/secret.txt\n");
+        write(dir.path(), "app/secret.txt", "x\n");
+        write(dir.path(), "app/visible.txt", "y\n");
+        init_git(dir.path());
+        git(dir.path(), &["add", "app/visible.txt", ".gitignore"]);
+        git(dir.path(), &["commit", "-qm", "seed"]);
+        let scanner = Scanner::new(&dir.path().join("app")).unwrap();
+        assert!(!scanner.any_match("secret.txt").unwrap());
+        assert!(scanner.any_match("visible.txt").unwrap());
+    }
 }
