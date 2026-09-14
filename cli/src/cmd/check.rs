@@ -79,9 +79,9 @@ pub fn run(ctx: &Ctx, changed_only: bool, base: Option<String>) -> CliResult {
     let flow = FlowConfig::from_manifest(&manifest);
     let spec = base.unwrap_or_else(|| format!("origin/{}", flow.trunk));
     // Attribution is for the full scan too — CI never passes `--changed`, and that's where
-    // inherited trunk debt has to stop blocking unrelated PRs. No resolvable base, or a
-    // base that *is* HEAD (we're on trunk), stays absolute.
-    scanner.set_baseline(resolve_baseline(&root, &spec));
+    // inherited trunk debt has to stop blocking unrelated PRs. No resolvable base, or being
+    // on trunk itself, stays absolute.
+    scanner.set_baseline(resolve_baseline(&root, &spec, &flow.trunk));
     if changed_only {
         let changed = changed_files(&root, &spec)?;
         scanner.retain(&changed);
@@ -651,19 +651,40 @@ fn merge_base(root: &Path, spec: &str) -> Option<String> {
     (!sha.is_empty()).then_some(sha)
 }
 
-/// Attribution base: the merge-base with `spec`, unless that *is* HEAD (we're on trunk —
-/// no PR to bill, so findings stay absolute).
-fn resolve_baseline(root: &Path, spec: &str) -> Option<String> {
+/// Attribution base: the merge-base with `spec`, unless we're on trunk (no PR to bill, so
+/// findings stay absolute and trunk can't accumulate silent debt).
+///
+/// "On trunk" is decided by branch name, not by SHA: a branch just started with
+/// `midas flow start` sits at the trunk tip too, so merge-base == HEAD is also what the
+/// pre-commit hook sees for the first commit on every feature branch — and that is exactly
+/// where inherited drift must not block. Only a detached HEAD (CI on a trunk push) falls
+/// back to the SHA test.
+fn resolve_baseline(root: &Path, spec: &str, trunk: &str) -> Option<String> {
     let base = merge_base(root, spec)?;
-    let head = std::process::Command::new("git")
+    match current_branch(root) {
+        Some(branch) => (branch != trunk).then_some(base),
+        None => {
+            let head = git_stdout(root, &["rev-parse", "HEAD"])?;
+            (base != head).then_some(base)
+        }
+    }
+}
+
+/// The checked-out branch name, or `None` when HEAD is detached (or outside a repo).
+fn current_branch(root: &Path) -> Option<String> {
+    git_stdout(root, &["symbolic-ref", "--short", "-q", "HEAD"])
+}
+
+fn git_stdout(root: &Path, args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["rev-parse", "HEAD"])
+        .args(args)
         .output()
         .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())?;
-    (base != head).then_some(base)
+        .filter(|o| o.status.success())?;
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!s.is_empty()).then_some(s)
 }
 
 /// The changed-file set for `--changed`: everything different from the merge-base with
