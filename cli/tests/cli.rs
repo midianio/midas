@@ -2493,12 +2493,19 @@ fn check_doc_drift_without_base_stays_absolute() {
 
 #[test]
 fn check_doc_drift_on_trunk_stays_absolute() {
-    // origin/main == HEAD: we *are* trunk. Absolute, so trunk cannot accumulate silent debt.
+    // Checked out on `main` with origin/main == HEAD: we *are* trunk. Absolute, so trunk
+    // cannot accumulate silent debt.
     let dir = tempfile::tempdir().unwrap();
     clean_fixture(dir.path());
     opt_in_docs(dir.path());
     canon_ref(dir.path(), "thing", "app/api/src/**", "1999-01-01");
     init_git(dir.path());
+    // `git init` names the unborn branch per init.defaultBranch; pin it to the trunk name.
+    git(
+        dir.path(),
+        &["symbolic-ref", "HEAD", "refs/heads/main"],
+        None,
+    );
     git(dir.path(), &["add", "-A"], None);
     git(dir.path(), &["commit", "-qm", "seed"], None);
     let head = git_sha(dir.path());
@@ -2511,6 +2518,94 @@ fn check_doc_drift_on_trunk_stays_absolute() {
     let (code, v) = check_json(dir.path(), &[]);
     let r = result_named(&v, "DOC-0004");
     assert_eq!(r["outcome"], "fail");
+    assert_eq!(code, 2);
+}
+
+#[test]
+fn check_doc_drift_on_fresh_branch_at_trunk_tip_is_inherited() {
+    // `midas flow start` then the first commit: the branch has no commits of its own, so
+    // merge-base == HEAD exactly like being on trunk — but this is a feature branch and the
+    // pre-commit hook must not bill trunk's drift to it. Branch name, not SHA, decides.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    opt_in_docs(dir.path());
+    canon_ref(dir.path(), "thing", "app/api/src/**", "1999-01-01");
+    init_git(dir.path());
+    git(
+        dir.path(),
+        &["symbolic-ref", "HEAD", "refs/heads/main"],
+        None,
+    );
+    git(dir.path(), &["add", "-A"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "seed"],
+        Some(&git_stamp_days_ago(20)),
+    );
+    write(
+        dir.path(),
+        "app/api/src/main.rs",
+        "fn main() { /* moved */ }\n",
+    );
+    git(dir.path(), &["add", "app/api/src/main.rs"], None);
+    git(
+        dir.path(),
+        &["commit", "-qm", "trunk source"],
+        Some(&git_stamp_days_ago(10)),
+    );
+    let trunk = git_sha(dir.path());
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/main", &trunk],
+        None,
+    );
+    git(dir.path(), &["checkout", "-q", "-b", "feat"], None);
+    // Uncommitted, unrelated work — what the hook sees on the first commit.
+    write(dir.path(), "NOTES.md", "unrelated\n");
+
+    let (code, v) = check_json(dir.path(), &[]);
+    let r = result_named(&v, "DOC-0004");
+    assert_eq!(
+        r["outcome"], "inherited",
+        "a fresh branch at the trunk tip is not trunk: {r}"
+    );
+    assert_eq!(code, 0);
+    let findings = r["findings"].as_array().unwrap();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f["file"] == "docs/ref.api.thing.md" && f["origin"] == "trunk"),
+        "{findings:?}"
+    );
+}
+
+#[test]
+fn check_doc_drift_detached_at_trunk_tip_stays_absolute() {
+    // CI on a trunk push checks out a detached HEAD at origin/main. No branch name to go
+    // on, so the SHA test still applies: merge-base == HEAD means trunk, gate absolute.
+    let dir = tempfile::tempdir().unwrap();
+    clean_fixture(dir.path());
+    opt_in_docs(dir.path());
+    canon_ref(dir.path(), "thing", "app/api/src/**", "1999-01-01");
+    init_git(dir.path());
+    git(
+        dir.path(),
+        &["symbolic-ref", "HEAD", "refs/heads/main"],
+        None,
+    );
+    git(dir.path(), &["add", "-A"], None);
+    git(dir.path(), &["commit", "-qm", "seed"], None);
+    let head = git_sha(dir.path());
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/main", &head],
+        None,
+    );
+    git(dir.path(), &["checkout", "-q", "--detach", &head], None);
+
+    let (code, v) = check_json(dir.path(), &[]);
+    let r = result_named(&v, "DOC-0004");
+    assert_eq!(r["outcome"], "fail", "{r}");
     assert_eq!(code, 2);
 }
 

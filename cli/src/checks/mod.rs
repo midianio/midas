@@ -733,30 +733,15 @@ impl Scanner {
     }
 
     /// Attribute a causing commit: ancestor of the baseline is trunk debt; otherwise this branch.
-    /// No baseline (or baseline == HEAD) means no attribution — the finding stays absolute.
+    /// No baseline means no attribution — the finding stays absolute. Whether a baseline
+    /// applies at all (on-trunk detection) is the caller's call; see `check::resolve_baseline`.
     fn origin_of(&self, commit: &str) -> Option<Origin> {
         let baseline = self.baseline.as_deref()?;
-        if self.rev_parse("HEAD").as_deref() == Some(baseline) {
-            return None;
-        }
         Some(if self.is_ancestor(commit, baseline) {
             Origin::Trunk
         } else {
             Origin::Branch
         })
-    }
-
-    fn rev_parse(&self, spec: &str) -> Option<String> {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&self.root)
-            .args(["rev-parse", spec])
-            .output()
-            .ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-            .filter(|s| !s.is_empty())
     }
 
     fn is_ancestor(&self, commit: &str, of: &str) -> bool {
