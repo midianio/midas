@@ -947,6 +947,216 @@ fn dev_fails_fast_when_a_declared_port_is_busy() {
     );
 }
 
+/// Bind a TCP port from a child whose cwd (and binary) live under `dir`, so leftover
+/// detection treats it as this project's. Compiles a 5-line holder with `rustc`.
+fn spawn_port_holder(dir: &Path) -> (u16, std::process::Child) {
+    let src = dir.join("_hold.rs");
+    let bindir = dir.join("target").join("debug");
+    fs::create_dir_all(&bindir).unwrap();
+    let bin = bindir.join(if cfg!(windows) { "_hold.exe" } else { "_hold" });
+    fs::write(
+        &src,
+        r#"
+fn main() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    println!("{}", listener.local_addr().unwrap().port());
+    loop {
+        let _ = listener.accept();
+    }
+}
+"#,
+    )
+    .unwrap();
+    let status = std::process::Command::new("rustc")
+        .arg(&src)
+        .arg("-o")
+        .arg(&bin)
+        .status()
+        .expect("rustc available to compile the port holder");
+    assert!(status.success(), "rustc failed to build the port holder");
+    let mut child = std::process::Command::new(&bin)
+        .current_dir(dir)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(child.stdout.take().unwrap()),
+        &mut line,
+    )
+    .unwrap();
+    let port: u16 = line.trim().parse().expect("holder printed its port");
+    (port, child)
+}
+
+#[test]
+fn dev_fails_fast_when_a_project_leftover_holds_a_port() {
+    // No `port` in midas.toml — the same shape midian ships. A leftover listener whose
+    // cwd is the project must still fail the run and point at --kill-ports.
+    let dir = tempfile::tempdir().unwrap();
+    let (port, mut holder) = spawn_port_holder(dir.path());
+    fs::write(
+        dir.path().join("midas.toml"),
+        "[standard]\nversion = \"0.1.0\"\n[dev]\nprocesses = [\n\
+         { name = \"api\", cmd = \"echo should-not-run\" },\n]\n",
+    )
+    .unwrap();
+    let out = midas()
+        .args(["--no-color", "dev"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let _ = holder.kill();
+    let _ = holder.wait();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "project leftover is an expected failure"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!(":{port}")),
+        "names the leftover port: {stderr}"
+    );
+    assert!(
+        stderr.contains("--kill-ports"),
+        "points at the reclaim flag: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.contains("should-not-run"),
+        "no process spawns when leftover preflight fails: {stdout}"
+    );
+}
+
+#[test]
+fn dev_kill_ports_reclaims_a_project_leftover() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_port, mut holder) = spawn_port_holder(dir.path());
+    fs::write(
+        dir.path().join("midas.toml"),
+        "[standard]\nversion = \"0.1.0\"\n[dev]\nprocesses = [\n\
+         { name = \"api\", cmd = \"echo hi-from-api\" },\n]\n",
+    )
+    .unwrap();
+    let out = midas()
+        .args(["--no-color", "dev", "--kill-ports"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let _ = holder.wait();
+    assert!(
+        out.status.success(),
+        "kill-ports reclaims a project leftover: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("api │ hi-from-api"), "{stdout}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("freeing"),
+        "announces the reclaim: {stderr}"
+    );
+}
+
+#[test]
+fn dev_kill_ports_reclaims_a_declared_port() {
+    let dir = tempfile::tempdir().unwrap();
+    let (port, mut holder) = spawn_port_holder(dir.path());
+    fs::write(
+        dir.path().join("midas.toml"),
+        format!(
+            "[standard]\nversion = \"0.1.0\"\n[dev]\nprocesses = [\n\
+             {{ name = \"api\", cmd = \"echo hi-from-api\", port = {port} }},\n]\n"
+        ),
+    )
+    .unwrap();
+    let out = midas()
+        .args(["--no-color", "dev", "--kill-ports"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let _ = holder.wait();
+    assert!(
+        out.status.success(),
+        "kill-ports reclaims a declared port: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("api │ hi-from-api"), "{stdout}");
+}
+
+#[test]
+fn dev_ignores_unrelated_listener_at_project_root() {
+    // A random binary sitting in the project root (prettierd, an editor helper) must not
+    // be treated as a leftover — only rust `target/` orphans and known [dev] servers.
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("_other.rs");
+    let bin = dir.path().join(if cfg!(windows) {
+        "_other.exe"
+    } else {
+        "_other"
+    });
+    fs::write(
+        &src,
+        r#"
+fn main() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    println!("{}", listener.local_addr().unwrap().port());
+    loop {
+        let _ = listener.accept();
+    }
+}
+"#,
+    )
+    .unwrap();
+    assert!(std::process::Command::new("rustc")
+        .arg(&src)
+        .arg("-o")
+        .arg(&bin)
+        .status()
+        .unwrap()
+        .success());
+    let mut holder = std::process::Command::new(&bin)
+        .current_dir(dir.path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(holder.stdout.take().unwrap()),
+        &mut line,
+    )
+    .unwrap();
+    assert!(line.trim().parse::<u16>().is_ok());
+
+    fs::write(
+        dir.path().join("midas.toml"),
+        "[standard]\nversion = \"0.1.0\"\n[dev]\nprocesses = [\n\
+         { name = \"api\", cmd = \"echo hi-from-api\" },\n]\n",
+    )
+    .unwrap();
+    let out = midas()
+        .args(["--no-color", "dev"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let _ = holder.kill();
+    let _ = holder.wait();
+    assert!(
+        out.status.success(),
+        "unrelated root listener is not a leftover: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("api │ hi-from-api"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
 #[test]
 fn dev_with_free_declared_port_runs_normally() {
     // Bind-then-drop to get a port that is actually free right now.

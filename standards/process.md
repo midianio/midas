@@ -54,7 +54,8 @@ One-time, one path. `midas setup` will own this end-to-end (today it's three man
   migrations when data-isolated (`migrate = true`) → run the `api` and `web` processes with
   watch-and-restart. `midas dev
   db` is the tunnel-only invocation; the tunnel always comes up whichever subset you name. A held port
-  fails and names the holder unless you pass `--kill-ports`. (`app/api/package.json` still carries a
+  (declared on the process, or a leftover listener from this project) fails and names the holder
+  unless you pass `--kill-ports`. (`app/api/package.json` still carries a
   `dev` script that blocks on port 3309 before `cargo run`, but `midas dev` invokes `cargo run`
   directly per `midas.toml` and does not use it.)
 - **OPS-0006 [check]** — `midas flow` **owns** the connection string. `flow start`/`flow end` write

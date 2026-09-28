@@ -141,6 +141,8 @@ pub struct DevProcess {
     /// The port this process listens on. Declared ports are preflighted before anything spawns:
     /// a busy port fails the run fast (naming the holder) instead of a mid-startup bind panic or
     /// a dev server silently drifting to another port. `midas dev --kill-ports` reclaims them.
+    /// Omitting `port` is allowed; leftovers whose cwd or executable lives under the project
+    /// are still preflighted (and reclaimed with `--kill-ports`).
     #[serde(default)]
     pub port: Option<u16>,
 }

@@ -43,7 +43,7 @@ enum Commands {
         /// Disable the watch-and-restart loop for processes that declare `watch` paths.
         #[arg(long)]
         no_watch: bool,
-        /// Kill whatever holds a declared `port` before starting (default: fail and name it).
+        /// Kill leftover listeners from this project, and anything holding a declared `port`.
         #[arg(long)]
         kill_ports: bool,
     },

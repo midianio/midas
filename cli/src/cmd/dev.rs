@@ -10,10 +10,13 @@
 //! e.g. `cargo run` on a compile error — stays down until the next change instead of ending the
 //! session. `--no-watch` disables all watchers for the run.
 //!
-//! Declared `port`s (and the tunnel's) are preflighted before anything spawns: a stale listener
-//! would otherwise surface as a mid-startup `AddrInUse` panic, or worse, a dev server silently
-//! hopping to another port while everything configured against the real one breaks. A busy port
-//! fails the run naming its holder; `--kill-ports` kills the holders and proceeds.
+//! Declared `port`s (and the tunnel's) are preflighted before anything spawns, as are leftover
+//! listeners whose cwd or executable lives under this project — an orphaned `cargo run` child
+//! after a killed `midas` is the usual case, and it will not have been declared if the process
+//! omitted `port`. A stale listener would otherwise surface as a mid-startup `AddrInUse` panic,
+//! or worse, a dev server silently hopping to another port while everything configured against
+//! the real one breaks. A busy port fails the run naming its holder; `--kill-ports` kills the
+//! holders and proceeds.
 
 use crate::core::exit::{CliError, CliResult};
 use crate::core::Ctx;
@@ -87,9 +90,12 @@ pub fn run(ctx: &Ctx, only: Vec<String>, no_watch: bool, kill_ports: bool) -> Cl
         ));
     }
 
-    // Preflight: every declared port must be free before anything spawns — fail (or, with
-    // --kill-ports, reclaim) while nothing has started yet.
-    ensure_ports_free(ctx, &procs, kill_ports)?;
+    // Preflight: every declared port — and leftover listeners from this project — must be
+    // free before anything spawns. Fail (or, with --kill-ports, reclaim) while nothing has
+    // started yet. Project leftovers are how an undeclared `port` still gets reclaimed:
+    // midian-style manifests list `api` without `port = 8080`, and a previous `midas`
+    // that died hard leaves `target/debug/server` orphaned on 8080.
+    ensure_ports_free(ctx, &procs, kill_ports, &root)?;
 
     // Preflight: a JS process whose deps aren't installed dies with `vite: command not found` (127).
     // Install them once, up front, so `midas dev` works straight after `midas touch project`.
@@ -349,20 +355,30 @@ fn ensure_js_deps(ctx: &Ctx, procs: &[DevProcess], root: &Path) -> CliResult {
 }
 
 /// Fail fast when a declared `port` (or the tunnel's) already has a listener — checked before
-/// anything spawns, installs, or migrates. The alternative failure modes are strictly worse: the
-/// api panics with `AddrInUse` mid-startup, and Vite silently hops to a free port while everything
-/// configured against the declared one (ORIGIN, callback URLs) keeps pointing at the stale
-/// listener. With `kill`, the holders get the TERM → grace → KILL ladder and the run proceeds
-/// once each port frees up.
-fn ensure_ports_free(ctx: &Ctx, procs: &[DevProcess], kill: bool) -> CliResult {
+/// anything spawns, installs, or migrates — and when a leftover from *this* project is still
+/// listening, even if the process never declared `port`. The alternative failure modes are
+/// strictly worse: the api panics with `AddrInUse` mid-startup, and Vite silently hops to a
+/// free port while everything configured against the declared one (ORIGIN, callback URLs)
+/// keeps pointing at the stale listener. With `kill`, the holders get the TERM → grace →
+/// KILL ladder and the run proceeds once each port frees up.
+fn ensure_ports_free(ctx: &Ctx, procs: &[DevProcess], kill: bool, root: &Path) -> CliResult {
     /// One busy port's holders as `(pid, command)`; command may be empty when unresolvable.
     type Holders = Vec<(u32, String)>;
-    let mut busy: Vec<(&str, u16, Holders)> = Vec::new();
+    let mut busy: Vec<(String, u16, Holders)> = Vec::new();
     for p in procs {
         let Some(port) = p.port else { continue };
         if ports::listening(port) {
-            busy.push((&p.name, port, ports::holders(port)));
+            busy.push((p.name.clone(), port, ports::holders(port)));
         }
+    }
+    // Orphans from a previous `midas` (PPID 1, cwd/exe still under this repo) are invisible
+    // to the declared-port walk when `port` was omitted — which is how midian ships today.
+    let explicit_cwds = explicit_process_cwds(procs, root);
+    for (port, holders) in ports::project_listeners(root, &explicit_cwds) {
+        if busy.iter().any(|(_, p, _)| *p == port) {
+            continue;
+        }
+        busy.push((leftover_label(procs, root, &holders), port, holders));
     }
     if busy.is_empty() {
         return Ok(());
@@ -400,6 +416,59 @@ fn ensure_ports_free(ctx: &Ctx, procs: &[DevProcess], kill: bool) -> CliResult {
         }
     }
     Ok(())
+}
+
+/// Resolve each process's declared `cwd` against `root`. The tunnel (cwd omitted) is
+/// excluded — matching against the project root would attribute every editor helper
+/// (`prettierd`, …) to `db`.
+fn explicit_process_cwds(procs: &[DevProcess], root: &Path) -> Vec<PathBuf> {
+    procs
+        .iter()
+        .filter_map(|p| {
+            p.cwd.as_ref().map(|c| {
+                let dir = root.join(c);
+                dir.canonicalize().unwrap_or(dir)
+            })
+        })
+        .collect()
+}
+
+/// Attribute a leftover listener to the most specific `[dev]` process whose `cwd` contains
+/// the holder's, so the message says `api` rather than a bare command name. Falls back to
+/// the command (`server`) or `leftover`.
+fn leftover_label(procs: &[DevProcess], root: &Path, holders: &[(u32, String)]) -> String {
+    for (pid, cmd) in holders {
+        if let Some(cwd) = ports::cwd_of(*pid) {
+            if let Some(name) = most_specific_process(procs, root, &cwd) {
+                return name;
+            }
+        }
+        if !cmd.is_empty() {
+            return cmd.clone();
+        }
+    }
+    "leftover".into()
+}
+
+/// Longest process `cwd` (resolved against `root`) that contains `cwd` — so `app/api`
+/// wins over the tunnel's implicit project root.
+fn most_specific_process(procs: &[DevProcess], root: &Path, cwd: &Path) -> Option<String> {
+    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let mut best: Option<(String, usize)> = None;
+    for p in procs {
+        let dir = match &p.cwd {
+            Some(c) => root.join(c),
+            None => root.to_path_buf(),
+        };
+        let dir = dir.canonicalize().unwrap_or(dir);
+        if cwd.starts_with(&dir) {
+            let score = dir.as_os_str().len();
+            if best.as_ref().is_none_or(|(_, s)| score > *s) {
+                best = Some((p.name.clone(), score));
+            }
+        }
+    }
+    best.map(|(name, _)| name)
 }
 
 /// Render a port's holders for humans: `vite (pid 3941), node (pid 3999)` — or `holder unknown`
@@ -541,7 +610,9 @@ fn wait_for_port(port: u16, timeout: Duration, shutdown: &AtomicBool) -> bool {
 /// culprit. Lookup: macOS/BSD ship `lsof`; Linux reads `/proc` directly (lsof isn't always
 /// installed) with `lsof` as fallback; Windows parses `netstat -ano` (always present).
 mod ports {
+    use std::collections::BTreeMap;
     use std::net::TcpStream;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::{Duration, Instant};
 
@@ -561,6 +632,68 @@ mod ports {
             std::thread::sleep(Duration::from_millis(100));
         }
         false
+    }
+
+    /// Leftover listeners from a previous `midas dev` in this project: a rust binary under
+    /// `target/debug` or `target/release` (the usual orphaned `cargo run` child), or a
+    /// vite/bun/pscale/node whose cwd matches a `[dev]` process that declared `cwd`.
+    /// Grouped by port. A `node` at the repo root (`prettierd`, editor helpers) is ignored.
+    pub fn project_listeners(
+        root: &Path,
+        explicit_cwds: &[PathBuf],
+    ) -> Vec<(u16, Vec<(u32, String)>)> {
+        let mut by_port: BTreeMap<u16, Vec<(u32, String)>> = BTreeMap::new();
+        for (port, pid, cmd) in all_listeners() {
+            if !is_project_leftover(pid, &cmd, root, explicit_cwds) {
+                continue;
+            }
+            let entry = by_port.entry(port).or_default();
+            if !entry.iter().any(|(p, _)| *p == pid) {
+                entry.push((pid, cmd));
+            }
+        }
+        by_port.into_iter().collect()
+    }
+
+    /// Current working directory of `pid`, when the platform lets us read it.
+    pub fn cwd_of(pid: u32) -> Option<PathBuf> {
+        cwd_of_impl(pid)
+    }
+
+    fn is_project_leftover(pid: u32, cmd: &str, root: &Path, explicit_cwds: &[PathBuf]) -> bool {
+        if exe_of(pid).is_some_and(|e| is_rust_target(&e) && under_root(&e, root)) {
+            return true;
+        }
+        let Some(cwd) = cwd_of_impl(pid) else {
+            return false;
+        };
+        match cmd {
+            // Vite is `node` in lsof; require an explicit process cwd (`app/web`) so a
+            // repo-root `prettierd` is not treated as a leftover.
+            "node" => matches_explicit_cwd(&cwd, explicit_cwds),
+            "vite" | "bun" | "pscale" | "server" => under_root(&cwd, root),
+            _ => false,
+        }
+    }
+
+    fn is_rust_target(path: &Path) -> bool {
+        let s = path.to_string_lossy();
+        s.contains("/target/debug/")
+            || s.contains("/target/release/")
+            || s.contains("\\target\\debug\\")
+            || s.contains("\\target\\release\\")
+    }
+
+    fn matches_explicit_cwd(cwd: &Path, dirs: &[PathBuf]) -> bool {
+        let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        dirs.iter().any(|d| cwd.starts_with(d))
+    }
+
+    fn under_root(path: &Path, root: &Path) -> bool {
+        match (path.canonicalize(), root.canonicalize()) {
+            (Ok(p), Ok(r)) => p.starts_with(r),
+            _ => path.starts_with(root),
+        }
     }
 
     /// `(pid, command)` pairs listening on the port; `command` may be empty when unresolvable,
@@ -686,6 +819,224 @@ mod ports {
             }
         }
         res
+    }
+
+    /// Every TCP LISTEN socket as `(port, pid, command)`. Empty when the platform lookup fails.
+    #[cfg(all(unix, not(target_os = "linux")))]
+    fn all_listeners() -> Vec<(u16, u32, String)> {
+        lsof_all_listeners()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn all_listeners() -> Vec<(u16, u32, String)> {
+        let res = proc_all_listeners();
+        if !res.is_empty() {
+            return res;
+        }
+        lsof_all_listeners()
+    }
+
+    #[cfg(windows)]
+    fn all_listeners() -> Vec<(u16, u32, String)> {
+        netstat_all_listeners()
+    }
+
+    /// `lsof -Fpcn` over every listening TCP socket (no port filter).
+    #[cfg(unix)]
+    fn lsof_all_listeners() -> Vec<(u16, u32, String)> {
+        let Ok(out) = Command::new("lsof")
+            .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"])
+            .output()
+        else {
+            return Vec::new();
+        };
+        parse_lsof_pcn(&String::from_utf8_lossy(&out.stdout))
+    }
+
+    /// Parse `lsof -Fpcn`: `p<pid>`, `c<command>`, `n<addr:port>` (possibly several `n` per pid).
+    #[cfg(unix)]
+    fn parse_lsof_pcn(text: &str) -> Vec<(u16, u32, String)> {
+        let mut res = Vec::new();
+        let mut pid: Option<u32> = None;
+        let mut cmd = String::new();
+        for line in text.lines() {
+            if let Some(p) = line.strip_prefix('p') {
+                pid = p.parse().ok();
+                cmd.clear();
+            } else if let Some(c) = line.strip_prefix('c') {
+                cmd = c.to_string();
+            } else if let Some(name) = line.strip_prefix('n') {
+                if let (Some(pid), Some(port)) = (pid, lsof_name_port(name)) {
+                    if !res.iter().any(|(po, pi, _)| *po == port && *pi == pid) {
+                        res.push((port, pid, cmd.clone()));
+                    }
+                }
+            }
+        }
+        res
+    }
+
+    #[cfg(unix)]
+    fn lsof_name_port(name: &str) -> Option<u16> {
+        name.rsplit_once(':')?.1.parse().ok()
+    }
+
+    /// Invert `proc_holders`: inode → port, then every same-user pid holding those sockets.
+    #[cfg(target_os = "linux")]
+    fn proc_all_listeners() -> Vec<(u16, u32, String)> {
+        let mut inode_port: Vec<(String, u16)> = Vec::new();
+        for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
+            let Ok(text) = std::fs::read_to_string(table) else {
+                continue;
+            };
+            for line in text.lines().skip(1) {
+                let cols: Vec<&str> = line.split_whitespace().collect();
+                if cols.len() < 10 || cols[3] != "0A" {
+                    continue;
+                }
+                let Some((_, hex_port)) = cols[1].rsplit_once(':') else {
+                    continue;
+                };
+                if let Ok(port) = u16::from_str_radix(hex_port, 16) {
+                    inode_port.push((cols[9].to_string(), port));
+                }
+            }
+        }
+        if inode_port.is_empty() {
+            return Vec::new();
+        }
+
+        let mut res: Vec<(u16, u32, String)> = Vec::new();
+        let Ok(proc_dir) = std::fs::read_dir("/proc") else {
+            return res;
+        };
+        for entry in proc_dir.flatten() {
+            let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+                continue;
+            };
+            let Ok(fds) = std::fs::read_dir(entry.path().join("fd")) else {
+                continue;
+            };
+            let held: Vec<u16> = fds
+                .flatten()
+                .filter_map(|fd| {
+                    let t = std::fs::read_link(fd.path()).ok()?;
+                    let t = t.to_string_lossy();
+                    inode_port
+                        .iter()
+                        .find_map(|(i, port)| (t == format!("socket:[{i}]")).then_some(*port))
+                })
+                .collect();
+            if held.is_empty() {
+                continue;
+            }
+            let cmd = std::fs::read_to_string(entry.path().join("comm"))
+                .map(|c| c.trim().to_string())
+                .unwrap_or_default();
+            for port in held {
+                if !res.iter().any(|(po, pi, _)| *po == port && *pi == pid) {
+                    res.push((port, pid, cmd.clone()));
+                }
+            }
+        }
+        res
+    }
+
+    #[cfg(windows)]
+    fn netstat_all_listeners() -> Vec<(u16, u32, String)> {
+        let Ok(out) = Command::new("netstat").args(["-ano", "-p", "TCP"]).output() else {
+            return Vec::new();
+        };
+        let mut res = Vec::new();
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.len() < 5 || cols[0] != "TCP" || cols[3] != "LISTENING" {
+                continue;
+            }
+            let Some(port) = cols[1].rsplit_once(':').and_then(|(_, p)| p.parse().ok()) else {
+                continue;
+            };
+            if let Ok(pid) = cols[4].parse::<u32>() {
+                if !res.iter().any(|(po, pi, _)| *po == port && *pi == pid) {
+                    res.push((port, pid, String::new()));
+                }
+            }
+        }
+        res
+    }
+
+    #[cfg(target_os = "linux")]
+    fn cwd_of_impl(pid: u32) -> Option<PathBuf> {
+        std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
+    fn cwd_of_impl(pid: u32) -> Option<PathBuf> {
+        let out = Command::new("lsof")
+            .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+            .output()
+            .ok()?;
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if let Some(path) = line.strip_prefix('n') {
+                return Some(PathBuf::from(path));
+            }
+        }
+        None
+    }
+
+    #[cfg(windows)]
+    fn cwd_of_impl(_pid: u32) -> Option<PathBuf> {
+        None
+    }
+
+    #[cfg(target_os = "linux")]
+    fn exe_of(pid: u32) -> Option<PathBuf> {
+        std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn exe_of(pid: u32) -> Option<PathBuf> {
+        let mut buf = [0i8; 4096];
+        let n = unsafe { proc_pidpath(pid as i32, buf.as_mut_ptr(), buf.len() as u32) };
+        if n <= 0 {
+            return None;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, n as usize) };
+        Some(PathBuf::from(std::str::from_utf8(bytes).ok()?))
+    }
+
+    #[cfg(all(unix, not(target_os = "linux"), not(target_os = "macos")))]
+    fn exe_of(_pid: u32) -> Option<PathBuf> {
+        None
+    }
+
+    #[cfg(windows)]
+    fn exe_of(pid: u32) -> Option<PathBuf> {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return None;
+            }
+            let mut buf = [0u16; 1024];
+            let mut size = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut size);
+            CloseHandle(h);
+            if ok == 0 {
+                return None;
+            }
+            Some(PathBuf::from(String::from_utf16_lossy(
+                &buf[..size as usize],
+            )))
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    extern "C" {
+        fn proc_pidpath(pid: i32, buffer: *mut libc::c_char, buffersize: u32) -> i32;
     }
 
     /// Kill one foreign pid (not a process group we own): TERM, a grace window, then KILL — the
