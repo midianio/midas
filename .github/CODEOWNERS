@@ -1,0 +1,20 @@
+# Code owner — @devmattrs is auto-requested for review on every PR.
+#
+# GitHub never requests review from a PR's own author, so this only routes PRs opened by someone
+# else (a teammate or an agent). A pattern that matches nothing is silently dropped.
+
+* @devmattrs
+
+# The standard itself: every consumer repo inherits these on its next re-pin.
+/standards/         @devmattrs
+/registry/          @devmattrs
+/templates/         @devmattrs
+
+# Agent-instruction surface: editing these steers every future agent run in the repo.
+/AGENTS.md          @devmattrs
+/.cursor/           @devmattrs
+
+# CI and release config.
+/.github/           @devmattrs
+/midas.toml         @devmattrs
+/dist-workspace.toml @devmattrs

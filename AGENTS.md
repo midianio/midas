@@ -1,6 +1,6 @@
 ---
 owner: midas-core
-last_reviewed: 2026-08-19
+last_reviewed: 2026-10-21
 canon: true
 sources:
   - cli/src/cmd/**
@@ -23,6 +23,20 @@ and live in the `midas` repo under `standards/`. Before opening a PR:
 Review agents: run `midas check --json` and read `standards/` for the full set (review-tier
 conventions are semantic and not machine-checked).
 <!-- /midas -->
+
+## Sibling repositories
+
+Midian's core work spans three repos. Agents (including the bot team's Daedalus router) pick the repo by what the change touches, not by where the request arrived.
+
+| Repo | Owns | Trunk → PR base | Release |
+| --- | --- | --- | --- |
+| [`midianio/midian`](https://github.com/midianio/midian) | The app: `app/web`, `app/api`, `db/` (application schema), `analytics/` | `dev` (`main` is promotion-only) | Hestia promotes `dev` → `main` |
+| [`midianio/midas`](https://github.com/midianio/midas) | The `midas` CLI and the engineering standard (`standards/`, `registry/`, `templates/`) | `main` | `midas flow tag vX.Y.Z`, then bump the pin in each consumer's `midas.toml` |
+| [`midianio/orchestration`](https://github.com/midianio/orchestration) ("Orca") | Dagster data pipeline, alignment review UI (`apps/web`), Orca Postgres (`data/orca`) | `dev` (`main` is promotion-only) | Merge `dev` → `main` |
+
+- **One PR per repo.** A cross-repo change ships as linked PRs, never one repo vendoring another's code.
+- **Schema starts in midian.** A new or changed application table lands as a `midian/db/` migration first; orchestration then regenerates `data/application/models.py` against it.
+- **Standard changes start in midas.** A convention or `midas check` change is cut as a midas release before any consumer re-pins to it.
 
 ## Releasing midas
 

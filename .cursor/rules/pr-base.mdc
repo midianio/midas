@@ -1,0 +1,14 @@
+---
+description: PR base is main (midas trunk); releases go through midas flow tag
+alwaysApply: true
+---
+
+# PR base branch
+
+This repo's trunk is **`main`** (`[flow] trunk` in `midas.toml`). Feature, fix, chore, and docs branches open pull requests against `main`.
+
+- Prefer `midas flow start` → `midas flow ship`; it already targets the trunk. By hand, `gh pr create --base main`.
+- Never hand-roll a release (`AGT-0002`). Version bumps, the frozen registry snapshot, and the tag are cut by `midas flow tag vX.Y.Z` from a clean `main` (see `AGENTS.md`).
+- Gate every PR with `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `cargo run --quiet -- check --root .`.
+
+Consumers (`midianio/midian`, and any repo pinning a `midas.toml`) only see a change after a tagged release and a re-pin; see "Sibling repositories" in `AGENTS.md`.
