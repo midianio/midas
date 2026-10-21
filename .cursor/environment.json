@@ -1,0 +1,4 @@
+{
+  "name": "midas CLI",
+  "install": "bash .cursor/install.sh"
+}
