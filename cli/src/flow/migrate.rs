@@ -53,6 +53,8 @@ pub struct Report {
 pub enum MigrateError {
     /// An applied migration changed — a clean "no" (exit 2).
     Drift(String),
+    /// A `stamp` named a file that isn't a migration on disk — a clean "no" (exit 2).
+    Unknown(String),
     /// Connection / IO / SQL failure (exit 1).
     Failed(anyhow::Error),
 }
@@ -106,6 +108,40 @@ pub async fn apply(url: &str, root: &Path) -> Result<Report> {
         done.insert(m.version.clone());
         newly_applied.push(m.version.clone());
     }
+
+    let states = states(&migs, &done);
+    let _ = conn.close().await;
+    Ok(Report {
+        newly_applied,
+        states,
+    })
+}
+
+/// Record `requested` migrations as applied **without executing them** — for a branch whose schema
+/// already carries their effect (a PlanetScale deploy request just landed it, or a branch copy).
+/// Issues no DDL, so it works on safe-migrations branches; the ledger must already exist.
+pub async fn stamp(url: &str, root: &Path, requested: &[String]) -> Result<Report> {
+    let migs = discover(root)?;
+    let mut done = BTreeSet::new();
+    plan_stamp(&migs, &done, requested)?;
+    let mut conn = connect(url).await?;
+    require_ledger(&mut conn).await?;
+    let applied = load_applied(&mut conn).await?;
+    reconcile(&mut conn, &migs, &applied).await?;
+
+    done.extend(applied.keys().cloned());
+    let mut newly_applied = Vec::new();
+    for m in plan_stamp(&migs, &done, requested)? {
+        sqlx::query("INSERT INTO _migrations (version, applied_at, checksum) VALUES (?, ?, ?)")
+            .bind(&m.version)
+            .bind(now_millis())
+            .bind(&m.checksum)
+            .execute(&mut conn)
+            .await
+            .map_err(|e| MigrateError::Failed(anyhow::anyhow!("stamping {}: {e}", m.version)))?;
+        newly_applied.push(m.version.clone());
+    }
+    done.extend(newly_applied.iter().cloned());
 
     let states = states(&migs, &done);
     let _ = conn.close().await;
@@ -190,6 +226,49 @@ async fn ensure_ledger(conn: &mut MySqlConnection) -> Result<()> {
             .await?;
     }
     Ok(())
+}
+
+/// `stamp`'s DDL-free stand-in for [`ensure_ledger`]: shared branches reject direct DDL.
+async fn require_ledger(conn: &mut MySqlConnection) -> Result<()> {
+    let has_checksum: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.columns \
+         WHERE table_schema = DATABASE() AND table_name = '_migrations' AND column_name = 'checksum'",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if has_checksum == 0 {
+        return Err(MigrateError::Failed(anyhow::anyhow!(
+            "no `_migrations` ledger with a checksum column on the target — `stamp` never runs \
+             DDL, so create it with `midas migrate status` on a branch that allows DDL"
+        )));
+    }
+    Ok(())
+}
+
+/// Which `requested` files to record: each must exist on disk (a bare name or a
+/// `db/migrations/…` path); ones already in the ledger are skipped so re-runs are no-ops.
+fn plan_stamp<'a>(
+    migs: &'a [Migration],
+    done: &BTreeSet<String>,
+    requested: &[String],
+) -> Result<Vec<&'a Migration>> {
+    let mut wanted = BTreeSet::new();
+    for r in requested {
+        let name = Path::new(r)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(r.as_str());
+        if !migs.iter().any(|m| m.version == name) {
+            return Err(MigrateError::Unknown(format!(
+                "{name} is not a migration under {MIGRATIONS_DIR} — nothing stamped"
+            )));
+        }
+        wanted.insert(name.to_string());
+    }
+    Ok(migs
+        .iter()
+        .filter(|m| wanted.contains(&m.version) && !done.contains(&m.version))
+        .collect())
 }
 
 /// `filename -> stored checksum` for every applied migration (checksum is `None` for legacy rows
@@ -309,6 +388,32 @@ mod tests {
     fn discover_missing_dir_is_empty_not_error() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(discover(tmp.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn plan_stamp_accepts_paths_and_skips_recorded() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), "001_init.sql", "SELECT 1;");
+        write(tmp.path(), "002_a.sql", "SELECT 2;");
+        write(tmp.path(), "003_b.sql", "SELECT 3;");
+        let migs = discover(tmp.path()).unwrap();
+        let done = BTreeSet::from(["001_init.sql".to_string()]);
+        let req = vec![
+            "db/migrations/003_b.sql".to_string(),
+            "001_init.sql".to_string(),
+        ];
+        let plan = plan_stamp(&migs, &done, &req).unwrap();
+        let names: Vec<_> = plan.iter().map(|m| m.version.as_str()).collect();
+        assert_eq!(names, ["003_b.sql"]);
+    }
+
+    #[test]
+    fn plan_stamp_rejects_unknown_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), "001_init.sql", "SELECT 1;");
+        let migs = discover(tmp.path()).unwrap();
+        let err = plan_stamp(&migs, &BTreeSet::new(), &["099_nope.sql".to_string()]);
+        assert!(matches!(err, Err(MigrateError::Unknown(_))));
     }
 
     #[test]

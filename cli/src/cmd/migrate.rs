@@ -24,6 +24,13 @@ pub enum MigrateCmd {
     },
     /// Show which migrations are applied vs pending (read-only).
     Status,
+    /// Record migrations as applied without running them — for a branch a deploy request already
+    /// migrated. No DDL, no isolation check; still loopback-only (OPS-0009).
+    Stamp {
+        /// Migration files to record (`NNN_slug.sql` or a `db/migrations/…` path).
+        #[arg(required = true)]
+        files: Vec<String>,
+    },
 }
 
 pub fn run(ctx: &Ctx, cmd: MigrateCmd) -> CliResult {
@@ -48,6 +55,11 @@ pub fn run(ctx: &Ctx, cmd: MigrateCmd) -> CliResult {
         MigrateCmd::Status => {
             let report = block_on(migrate::status(&url, &root)).map_err(to_cli_err)?;
             print_status(ctx, &report);
+            Ok(())
+        }
+        MigrateCmd::Stamp { files } => {
+            let report = block_on(migrate::stamp(&url, &root, &files)).map_err(to_cli_err)?;
+            print_stamp(ctx, &report);
             Ok(())
         }
     }
@@ -109,7 +121,7 @@ fn block_on<F: std::future::Future>(fut: F) -> F::Output {
 /// top-level `finish`.
 fn to_cli_err(e: MigrateError) -> CliError {
     match e {
-        MigrateError::Drift(msg) => CliError::expected(msg),
+        MigrateError::Drift(msg) | MigrateError::Unknown(msg) => CliError::expected(msg),
         MigrateError::Failed(err) => CliError::tool(err),
     }
 }
@@ -127,6 +139,16 @@ fn print_apply(ctx: &Ctx, report: &Report) {
             "{} applied this run — {applied} total",
             report.newly_applied.len()
         ));
+    }
+    ctx.out.data(report, |_| human_summary(report));
+}
+
+fn print_stamp(ctx: &Ctx, report: &Report) {
+    for file in &report.newly_applied {
+        ctx.out.success(format!("stamped {file}"));
+    }
+    if report.newly_applied.is_empty() {
+        ctx.out.success("already recorded — nothing stamped");
     }
     ctx.out.data(report, |_| human_summary(report));
 }
