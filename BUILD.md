@@ -49,7 +49,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ todo · ⏸ deferred
 - ✅ `cmd/dev.rs` concurrent dev orchestrator (`[dev]` in midas.toml): prefixed streaming output,
      optional pscale tunnel (reuses `[flow]` + paired branch), per-process-group Ctrl-C teardown;
      auto-applies pending migrations once the tunnel is up (`[dev].migrate`, default on)
-- ✅ `cmd/migrate.rs` + `flow/migrate.rs` migration runner (`midas migrate` / `migrate status`):
+- ✅ `cmd/migrate.rs` + `flow/migrate.rs` migration runner (`midas migrate` / `migrate status` / `migrate stamp`):
      forward-only `db/migrations/NNN_*.sql` over sqlx, no-txn `raw_sql` apply (Vitess/OPS-0008),
      `_migrations` checksum ledger (BE-0007 drift guard), local-tunnel-only guard (OPS-0009)
 - ✅ `cmd/add.rs` + `cmd/new.rs` scaffolding; `cmd/templates.rs` embedded skeletons

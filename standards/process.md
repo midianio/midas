@@ -148,8 +148,11 @@ now.) **`dev` is the integration trunk** — every feature PRs into it; `main` i
   `midas migrate apply --yes` against `127.0.0.1` (the local-only guard holds — CI applies *through
   the tunnel*, never to a remote host), and opens/refreshes the DR
   (`.github/workflows/db-deploy-request.yml`). **DR approval is deliberately *not* cascaded from
-  GitHub PR review** — it's a separate manual click. On merge, CI deploys the DR and deletes the
-  pscale branch (`.github/workflows/db-deploy.yml`). The legacy Go `db/cmd/migrate` binary is gone
+  GitHub PR review** — it's a separate manual click. On merge, CI deploys the DR, records the PR's
+  migration files in the target branch's ledger with `midas migrate stamp <files>` through a tunnel
+  (a DR promotes schema, never `_migrations` rows — without the stamp the target's ledger silently
+  falls behind its schema), then deletes the pscale branch (`.github/workflows/db-deploy.yml`).
+  `stamp` runs no DDL and no SQL from the files, so it is safe on a safe-migrations branch. The legacy Go `db/cmd/migrate` binary is gone
   along with the rest of the Go tree; `midas migrate` is the single runner for both local dev and CI.
 - **OPS-0009 [review]** — Clean up paired pscale branches: `midas flow end [--delete-data]`
   (`--force` was the midflow spelling and no longer exists). `--delete-data` deletes the derived
