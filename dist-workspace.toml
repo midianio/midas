@@ -21,3 +21,7 @@ hosting = "github"
 # Whether to install an updater program (`midas-update` alongside shell/PowerShell installs).
 # Homebrew users still upgrade via the tap (`brew update midianio/homebrew-tap && brew upgrade midas`).
 install-updater = true
+
+# GitHub no longer runs dist's default `macos-14` image for Apple Silicon: the job cancels at start.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
