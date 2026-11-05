@@ -152,7 +152,9 @@ now.) **`dev` is the integration trunk** — every feature PRs into it; `main` i
   migration files in the target branch's ledger with `midas migrate stamp <files>` through a tunnel
   (a DR promotes schema, never `_migrations` rows — without the stamp the target's ledger silently
   falls behind its schema), then deletes the pscale branch (`.github/workflows/db-deploy.yml`).
-  `stamp` runs no DDL and no SQL from the files, so it is safe on a safe-migrations branch. The legacy Go `db/cmd/migrate` binary is gone
+  `stamp` runs no DDL and no SQL from the files, so it is safe on a safe-migrations branch. If a
+  seeded branch still inherits a stale ledger, `midas migrate apply` records (never re-runs) pending
+  files whose every statement is already live, and stops on a half-applied one. The legacy Go `db/cmd/migrate` binary is gone
   along with the rest of the Go tree; `midas migrate` is the single runner for both local dev and CI.
 - **OPS-0009 [review]** — Clean up paired pscale branches: `midas flow end [--delete-data]`
   (`--force` was the midflow spelling and no longer exists). `--delete-data` deletes the derived

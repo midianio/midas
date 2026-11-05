@@ -71,6 +71,7 @@ pub fn apply_pending(ctx: &Ctx, manifest: &Manifest, root: &Path) -> CliResult {
     let cfg = FlowConfig::from_manifest(manifest);
     let url = resolve_url(&cfg)?;
     let report = block_on(migrate::apply(&url, root)).map_err(to_cli_err)?;
+    print_adopted(ctx, &report);
     if report.newly_applied.is_empty() {
         ctx.out.step("migrations up to date");
     } else {
@@ -121,12 +122,24 @@ fn block_on<F: std::future::Future>(fut: F) -> F::Output {
 /// top-level `finish`.
 fn to_cli_err(e: MigrateError) -> CliError {
     match e {
-        MigrateError::Drift(msg) | MigrateError::Unknown(msg) => CliError::expected(msg),
+        MigrateError::Drift(msg) | MigrateError::Unknown(msg) | MigrateError::Partial(msg) => {
+            CliError::expected(msg)
+        }
         MigrateError::Failed(err) => CliError::tool(err),
     }
 }
 
+/// Say which files were recorded rather than run; the ledger changed without any SQL executing.
+fn print_adopted(ctx: &Ctx, report: &Report) {
+    for file in &report.adopted {
+        ctx.out.info(format!(
+            "adopted {file} — already in the schema, recorded only"
+        ));
+    }
+}
+
 fn print_apply(ctx: &Ctx, report: &Report) {
+    print_adopted(ctx, report);
     for file in &report.newly_applied {
         ctx.out.success(format!("applied {file}"));
     }
@@ -157,7 +170,11 @@ fn print_status(ctx: &Ctx, report: &Report) {
     let pending = report.states.iter().filter(|s| !s.applied).count();
     for s in &report.states {
         let mark = if s.applied { "✓" } else { "·" };
-        let tail = if s.applied { "" } else { " (pending)" };
+        let tail = match (s.applied, report.adopted.contains(&s.version)) {
+            (true, _) => "",
+            (false, true) => " (pending — already in the schema, apply will record it)",
+            (false, false) => " (pending)",
+        };
         ctx.out.info(format!("{mark} {}{tail}", s.version));
     }
     ctx.out.step(format!(

@@ -44,6 +44,9 @@ pub struct MigrationState {
 pub struct Report {
     /// File names applied during this pass (empty for `status`).
     pub newly_applied: Vec<String>,
+    /// Pending files recorded without running, because the schema already carries them. For
+    /// `status` these are the files the next `apply` would adopt.
+    pub adopted: Vec<String>,
     /// Full ordered list with applied flag (after the pass).
     pub states: Vec<MigrationState>,
 }
@@ -55,6 +58,8 @@ pub enum MigrateError {
     Drift(String),
     /// A `stamp` named a file that isn't a migration on disk — a clean "no" (exit 2).
     Unknown(String),
+    /// A pending migration is only partly in the schema — a clean "no" (exit 2).
+    Partial(String),
     /// Connection / IO / SQL failure (exit 1).
     Failed(anyhow::Error),
 }
@@ -89,32 +94,62 @@ pub async fn apply(url: &str, root: &Path) -> Result<Report> {
 
     let mut done: BTreeSet<String> = applied.keys().cloned().collect();
     let mut newly_applied = Vec::new();
+    let mut adopted = Vec::new();
+    let mut schema = None;
     for m in &migs {
         if done.contains(&m.version) {
             continue;
+        }
+        if schema.is_none() {
+            schema = Some(load_schema(&mut conn).await?);
+        }
+        match classify(&m.sql, schema.as_ref().expect("loaded above")) {
+            Verdict::Adopt => {
+                record(&mut conn, m).await?;
+                done.insert(m.version.clone());
+                adopted.push(m.version.clone());
+                continue;
+            }
+            Verdict::Partial(missing) => return Err(partial_error(&m.version, &missing)),
+            Verdict::Run => {}
         }
         // No transaction wrapper — Vitess forbids DDL-in-transaction (OPS-0008).
         sqlx::raw_sql(&m.sql)
             .execute(&mut conn)
             .await
             .map_err(|e| MigrateError::Failed(anyhow::anyhow!("applying {}: {e}", m.version)))?;
-        sqlx::query("INSERT INTO _migrations (version, applied_at, checksum) VALUES (?, ?, ?)")
-            .bind(&m.version)
-            .bind(now_millis())
-            .bind(&m.checksum)
-            .execute(&mut conn)
-            .await
-            .map_err(|e| MigrateError::Failed(anyhow::anyhow!("recording {}: {e}", m.version)))?;
+        record(&mut conn, m).await?;
         done.insert(m.version.clone());
         newly_applied.push(m.version.clone());
+        schema = None; // This file changed the schema; the next pending one must see that.
     }
 
     let states = states(&migs, &done);
     let _ = conn.close().await;
     Ok(Report {
         newly_applied,
+        adopted,
         states,
     })
+}
+
+async fn record(conn: &mut MySqlConnection, m: &Migration) -> Result<()> {
+    sqlx::query("INSERT INTO _migrations (version, applied_at, checksum) VALUES (?, ?, ?)")
+        .bind(&m.version)
+        .bind(now_millis())
+        .bind(&m.checksum)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| MigrateError::Failed(anyhow::anyhow!("recording {}: {e}", m.version)))?;
+    Ok(())
+}
+
+fn partial_error(version: &str, missing: &[String]) -> MigrateError {
+    MigrateError::Partial(format!(
+        "{version} is partly in the schema (missing: {}) — it failed mid-file or the branch \
+         drifted. Fix forward, or `midas migrate stamp {version}` if the schema is right",
+        missing.join(", ")
+    ))
 }
 
 /// Record `requested` migrations as applied **without executing them** — for a branch whose schema
@@ -132,13 +167,7 @@ pub async fn stamp(url: &str, root: &Path, requested: &[String]) -> Result<Repor
     done.extend(applied.keys().cloned());
     let mut newly_applied = Vec::new();
     for m in plan_stamp(&migs, &done, requested)? {
-        sqlx::query("INSERT INTO _migrations (version, applied_at, checksum) VALUES (?, ?, ?)")
-            .bind(&m.version)
-            .bind(now_millis())
-            .bind(&m.checksum)
-            .execute(&mut conn)
-            .await
-            .map_err(|e| MigrateError::Failed(anyhow::anyhow!("stamping {}: {e}", m.version)))?;
+        record(&mut conn, m).await?;
         newly_applied.push(m.version.clone());
     }
     done.extend(newly_applied.iter().cloned());
@@ -147,6 +176,7 @@ pub async fn stamp(url: &str, root: &Path, requested: &[String]) -> Result<Repor
     let _ = conn.close().await;
     Ok(Report {
         newly_applied,
+        adopted: Vec::new(),
         states,
     })
 }
@@ -163,10 +193,18 @@ pub async fn status(url: &str, root: &Path) -> Result<Report> {
     let applied = load_applied(&mut conn).await?;
     reconcile(&mut conn, &migs, &applied).await?;
     let done: BTreeSet<String> = applied.keys().cloned().collect();
+    let schema = load_schema(&mut conn).await?;
+    let adopted = migs
+        .iter()
+        .filter(|m| !done.contains(&m.version))
+        .filter(|m| matches!(classify(&m.sql, &schema), Verdict::Adopt))
+        .map(|m| m.version.clone())
+        .collect();
     let states = states(&migs, &done);
     let _ = conn.close().await;
     Ok(Report {
         newly_applied: Vec::new(),
+        adopted,
         states,
     })
 }
@@ -271,6 +309,37 @@ fn plan_stamp<'a>(
         .collect())
 }
 
+/// Every table, column and index on the target, for [`classify`]. Names are lowercased; `CAST`
+/// because Vitess can hand `information_schema` strings back as binary.
+async fn load_schema(conn: &mut MySqlConnection) -> Result<Schema> {
+    let mut schema = Schema::default();
+    let rows = sqlx::query(
+        "SELECT CAST(table_name AS CHAR), CAST(column_name AS CHAR) \
+         FROM information_schema.columns WHERE table_schema = DATABASE()",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    for r in rows {
+        let t: String = r.try_get(0)?;
+        let c: String = r.try_get(1)?;
+        let t = t.to_lowercase();
+        schema.columns.insert((t.clone(), c.to_lowercase()));
+        schema.tables.insert(t);
+    }
+    let rows = sqlx::query(
+        "SELECT CAST(table_name AS CHAR), CAST(index_name AS CHAR) \
+         FROM information_schema.statistics WHERE table_schema = DATABASE()",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    for r in rows {
+        let t: String = r.try_get(0)?;
+        let i: String = r.try_get(1)?;
+        schema.indexes.insert((t.to_lowercase(), i.to_lowercase()));
+    }
+    Ok(schema)
+}
+
 /// `filename -> stored checksum` for every applied migration (checksum is `None` for legacy rows
 /// the Go runner wrote without one).
 async fn load_applied(conn: &mut MySqlConnection) -> Result<BTreeMap<String, Option<String>>> {
@@ -340,6 +409,268 @@ fn sha256_hex(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
+}
+
+// --- Adoption -------------------------------------------------------------------------------
+//
+// A deploy request ships schema but never `_migrations` rows, and a seeded branch copies whatever
+// its parent's ledger says, so a pending file can already be live. Replaying it dies on 1050/1060.
+// `classify` compares what a file would do with what the target has, and only records it when
+// every statement is provably done. Presence only: it doesn't compare column types.
+
+/// The target's structure, lowercased.
+#[derive(Debug, Default)]
+struct Schema {
+    tables: BTreeSet<String>,
+    columns: BTreeSet<(String, String)>,
+    indexes: BTreeSet<(String, String)>,
+}
+
+/// One checkable consequence of a statement.
+#[derive(Debug, PartialEq)]
+enum Effect {
+    Table(String),
+    NoTable(String),
+    Column(String, String),
+    NoColumn(String, String),
+    Index(String, String),
+    NoIndex(String, String),
+}
+
+impl Effect {
+    fn holds(&self, s: &Schema) -> bool {
+        let pair = |a: &String, b: &String| (a.clone(), b.clone());
+        match self {
+            Effect::Table(t) => s.tables.contains(t),
+            Effect::NoTable(t) => !s.tables.contains(t),
+            Effect::Column(t, c) => s.columns.contains(&pair(t, c)),
+            Effect::NoColumn(t, c) => !s.columns.contains(&pair(t, c)),
+            Effect::Index(t, i) => s.indexes.contains(&pair(t, i)),
+            Effect::NoIndex(t, i) => !s.indexes.contains(&pair(t, i)),
+        }
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            Effect::Table(t) => format!("table {t}"),
+            Effect::NoTable(t) => format!("drop of table {t}"),
+            Effect::Column(t, c) => format!("column {t}.{c}"),
+            Effect::NoColumn(t, c) => format!("drop of column {t}.{c}"),
+            Effect::Index(t, i) => format!("index {t}.{i}"),
+            Effect::NoIndex(t, i) => format!("drop of index {t}.{i}"),
+        }
+    }
+}
+
+/// What the runner should do with a pending file.
+#[derive(Debug, PartialEq)]
+enum Verdict {
+    /// Nothing of it is live yet (or it can't be judged): execute it.
+    Run,
+    /// All of it is live: record it without executing.
+    Adopt,
+    /// Some is live and some isn't: replaying would fail, recording would lie.
+    Partial(Vec<String>),
+}
+
+/// Judge a pending file against `schema`. `IF [NOT] EXISTS` statements can't conflict, so they
+/// never count as evidence that the file already ran, and a file with statements we can't check
+/// (data, `MODIFY`) is only ever `Partial` or `Run`: never adopted on a guess.
+fn classify(sql: &str, schema: &Schema) -> Verdict {
+    let mut held = 0;
+    let mut missing = Vec::new();
+    let mut opaque = false;
+    for stmt in statements(sql) {
+        let parsed = parse_statement(&stmt);
+        opaque |= parsed.opaque;
+        for e in parsed.effects {
+            if !e.holds(schema) {
+                missing.push(e.describe());
+            } else if !parsed.idempotent {
+                held += 1;
+            }
+        }
+    }
+    match (held, missing.is_empty(), opaque) {
+        (0, _, _) => Verdict::Run,
+        (_, true, false) => Verdict::Adopt,
+        (_, true, true) => Verdict::Partial(vec!["statements midas can't check".to_string()]),
+        (_, false, _) => Verdict::Partial(missing),
+    }
+}
+
+/// Split a file into statements: comments stripped, split on `;` outside quotes.
+fn statements(sql: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = sql.chars().peekable();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                cur.push(c);
+                if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '\'' | '"' | '`' => {
+                    quote = Some(c);
+                    cur.push(c);
+                }
+                '-' if chars.peek() == Some(&'-') => {
+                    for n in chars.by_ref() {
+                        if n == '\n' {
+                            break;
+                        }
+                    }
+                    cur.push(' ');
+                }
+                '#' => {
+                    for n in chars.by_ref() {
+                        if n == '\n' {
+                            break;
+                        }
+                    }
+                    cur.push(' ');
+                }
+                '/' if chars.peek() == Some(&'*') => {
+                    chars.next();
+                    let mut prev = ' ';
+                    for n in chars.by_ref() {
+                        if prev == '*' && n == '/' {
+                            break;
+                        }
+                        prev = n;
+                    }
+                    cur.push(' ');
+                }
+                ';' => {
+                    out.push(std::mem::take(&mut cur));
+                }
+                _ => cur.push(c),
+            },
+        }
+    }
+    out.push(cur);
+    out.retain(|s| !s.trim().is_empty());
+    out
+}
+
+#[derive(Debug, Default)]
+struct Parsed {
+    effects: Vec<Effect>,
+    idempotent: bool,
+    opaque: bool,
+}
+
+/// Whitespace-separated tokens with `(`, `)` and `,` as their own tokens; backticks removed.
+fn tokens(stmt: &str) -> Vec<String> {
+    stmt.replace('`', "")
+        .replace('(', " ( ")
+        .replace(')', " ) ")
+        .replace(',', " , ")
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect()
+}
+
+fn parse_statement(stmt: &str) -> Parsed {
+    let t = tokens(stmt);
+    let w: Vec<&str> = t.iter().map(String::as_str).collect();
+    let opaque = Parsed {
+        opaque: true,
+        ..Parsed::default()
+    };
+    match w.as_slice() {
+        ["create", "table", "if", "not", "exists", name, ..] => Parsed {
+            effects: vec![Effect::Table(bare(name))],
+            idempotent: true,
+            opaque: false,
+        },
+        ["create", "table", name, ..] => Parsed {
+            effects: vec![Effect::Table(bare(name))],
+            ..Parsed::default()
+        },
+        ["drop", "table", "if", "exists", names @ ..] => Parsed {
+            effects: table_list(names).into_iter().map(Effect::NoTable).collect(),
+            idempotent: true,
+            opaque: false,
+        },
+        ["drop", "table", names @ ..] => Parsed {
+            effects: table_list(names).into_iter().map(Effect::NoTable).collect(),
+            ..Parsed::default()
+        },
+        ["create", "unique", "index", i, "on", t, ..] | ["create", "index", i, "on", t, ..] => {
+            Parsed {
+                effects: vec![Effect::Index(bare(t), bare(i))],
+                ..Parsed::default()
+            }
+        }
+        ["drop", "index", i, "on", t, ..] => Parsed {
+            effects: vec![Effect::NoIndex(bare(t), bare(i))],
+            ..Parsed::default()
+        },
+        ["alter", "table", t, rest @ ..] => parse_alter(&bare(t), rest).unwrap_or(opaque),
+        _ => opaque,
+    }
+}
+
+/// `DROP TABLE a, b` names, stopping at any trailing `RESTRICT`/`CASCADE`.
+fn table_list(names: &[&str]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|n| **n != ",")
+        .take_while(|n| !matches!(**n, "restrict" | "cascade"))
+        .map(|n| bare(n))
+        .collect()
+}
+
+/// `db.table` → `table`.
+fn bare(name: &str) -> String {
+    name.rsplit('.').next().unwrap_or(name).to_string()
+}
+
+/// Effects of an `ALTER TABLE`'s comma-separated clauses, or `None` if any clause isn't checkable.
+fn parse_alter(table: &str, rest: &[&str]) -> Option<Parsed> {
+    let mut effects = Vec::new();
+    let mut depth = 0usize;
+    let mut clause: Vec<&str> = Vec::new();
+    for w in rest.iter().copied().chain(std::iter::once(",")) {
+        match w {
+            "(" => depth += 1,
+            ")" => depth = depth.saturating_sub(1),
+            "," if depth == 0 => {
+                effects.push(parse_clause(table, &clause)?);
+                clause.clear();
+                continue;
+            }
+            _ => {}
+        }
+        clause.push(w);
+    }
+    Some(Parsed {
+        effects,
+        ..Parsed::default()
+    })
+}
+
+fn parse_clause(t: &str, c: &[&str]) -> Option<Effect> {
+    let t = t.to_string();
+    match c {
+        ["add", "unique" | "fulltext", "index" | "key", i, ..]
+        | ["add", "index" | "key" | "unique" | "fulltext", i, ..] => {
+            Some(Effect::Index(t, bare(i)))
+        }
+        ["add", "column", "(", ..] | ["add", "(", ..] | ["add", "constraint", ..] => None,
+        ["add", "primary", ..] | ["add", "foreign", ..] | ["add", "check", ..] => None,
+        ["add", "column", col, ..] | ["add", col, ..] => Some(Effect::Column(t, bare(col))),
+        ["drop", "index" | "key", i] => Some(Effect::NoIndex(t, bare(i))),
+        ["drop", "column", col] => Some(Effect::NoColumn(t, bare(col))),
+        ["drop", "primary", ..] | ["drop", "foreign", ..] | ["drop", "check", ..] => None,
+        ["drop", col] => Some(Effect::NoColumn(t, bare(col))),
+        _ => None,
+    }
 }
 
 /// Strip the password from a `mysql://user:pass@host/db` URL for safe display in errors.
@@ -414,6 +745,122 @@ mod tests {
         let migs = discover(tmp.path()).unwrap();
         let err = plan_stamp(&migs, &BTreeSet::new(), &["099_nope.sql".to_string()]);
         assert!(matches!(err, Err(MigrateError::Unknown(_))));
+    }
+
+    fn schema(tables: &[&str], columns: &[(&str, &str)], indexes: &[(&str, &str)]) -> Schema {
+        let own = |p: &[(&str, &str)]| {
+            p.iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
+        };
+        Schema {
+            tables: tables.iter().map(|t| t.to_string()).collect(),
+            columns: own(columns),
+            indexes: own(indexes),
+        }
+    }
+
+    // The shape of the real 046_slide-decks.sql that kept failing on seeded branches.
+    const TABLES_AND_COLUMN: &str = "-- 046 comment; with a semicolon\n\
+        CREATE TABLE `slide_decks` (\n  id VARCHAR(64) NOT NULL,\n  PRIMARY KEY (id)\n);\n\
+        CREATE TABLE `slide_style_memories` (id VARCHAR(64) NOT NULL);\n\
+        ALTER TABLE `users` ADD COLUMN `referral_bonus_slides` INT NOT NULL DEFAULT 0;\n";
+
+    #[test]
+    fn adopts_a_file_that_is_fully_live() {
+        let s = schema(
+            &["slide_decks", "slide_style_memories", "users"],
+            &[("users", "referral_bonus_slides")],
+            &[],
+        );
+        assert_eq!(classify(TABLES_AND_COLUMN, &s), Verdict::Adopt);
+    }
+
+    #[test]
+    fn runs_a_file_that_is_not_live_at_all() {
+        let s = schema(&["users"], &[("users", "id")], &[]);
+        assert_eq!(classify(TABLES_AND_COLUMN, &s), Verdict::Run);
+    }
+
+    #[test]
+    fn refuses_a_half_applied_file_and_names_what_is_missing() {
+        let s = schema(&["slide_decks", "users"], &[], &[]);
+        match classify(TABLES_AND_COLUMN, &s) {
+            Verdict::Partial(missing) => assert_eq!(
+                missing,
+                [
+                    "table slide_style_memories",
+                    "column users.referral_bonus_slides"
+                ]
+            ),
+            v => panic!("expected Partial, got {v:?}"),
+        }
+    }
+
+    #[test]
+    fn multi_clause_alter_needs_every_clause() {
+        let sql = "ALTER TABLE `users`\n  ADD COLUMN `a` text NULL,\n  \
+                   ADD COLUMN `b` decimal(10, 2) NULL,\n  ADD INDEX idx_a (a, b);";
+        let all = schema(
+            &["users"],
+            &[("users", "a"), ("users", "b")],
+            &[("users", "idx_a")],
+        );
+        assert_eq!(classify(sql, &all), Verdict::Adopt);
+        let some = schema(&["users"], &[("users", "a")], &[]);
+        assert!(matches!(classify(sql, &some), Verdict::Partial(_)));
+    }
+
+    #[test]
+    fn index_spellings_all_name_the_index() {
+        let sql = "ALTER TABLE t ADD FULLTEXT INDEX ft (a), ADD UNIQUE KEY uq (b), ADD KEY k (c);";
+        let s = schema(&["t"], &[], &[("t", "ft"), ("t", "uq"), ("t", "k")]);
+        assert_eq!(classify(sql, &s), Verdict::Adopt);
+    }
+
+    #[test]
+    fn drops_are_live_once_the_thing_is_gone() {
+        let sql = "ALTER TABLE prayers DROP INDEX idx_list, DROP COLUMN list_id;";
+        let gone = schema(&["prayers"], &[("prayers", "id")], &[]);
+        assert_eq!(classify(sql, &gone), Verdict::Adopt);
+        let there = schema(
+            &["prayers"],
+            &[("prayers", "list_id")],
+            &[("prayers", "idx_list")],
+        );
+        assert_eq!(classify(sql, &there), Verdict::Run);
+    }
+
+    #[test]
+    fn if_exists_statements_are_not_evidence_the_file_ran() {
+        // Vacuously true on a branch that never had the table; 099_drop-dead-tables has this shape.
+        let sql = "DROP TABLE IF EXISTS old; CREATE TABLE fresh (id INT);";
+        assert_eq!(classify(sql, &schema(&[], &[], &[])), Verdict::Run);
+        let only_guarded = "DROP TABLE IF EXISTS old;";
+        assert_eq!(classify(only_guarded, &schema(&[], &[], &[])), Verdict::Run);
+    }
+
+    #[test]
+    fn guarded_statements_still_block_adoption_when_unmet() {
+        let sql = "DROP TABLE IF EXISTS old; ALTER TABLE t ADD COLUMN c INT;";
+        let s = schema(&["old", "t"], &[("t", "c")], &[]);
+        assert!(matches!(classify(sql, &s), Verdict::Partial(_)));
+    }
+
+    #[test]
+    fn data_statements_are_never_adopted_on_a_guess() {
+        let backfill = "UPDATE users SET a = 1;";
+        assert_eq!(classify(backfill, &schema(&[], &[], &[])), Verdict::Run);
+        let mixed = "ALTER TABLE users ADD COLUMN a INT; UPDATE users SET a = 1;";
+        let s = schema(&["users"], &[("users", "a")], &[]);
+        assert!(matches!(classify(mixed, &s), Verdict::Partial(_)));
+    }
+
+    #[test]
+    fn statements_ignores_semicolons_in_comments_and_strings() {
+        let got = statements("-- a; b\nINSERT INTO t VALUES ('x;y');\n/* c; d */\nSELECT 1;\n");
+        assert_eq!(got.len(), 2);
+        assert!(got[0].contains("'x;y'"));
     }
 
     #[test]
